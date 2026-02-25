@@ -1,7 +1,9 @@
 package com.example.stockapp.ui.home
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.stockapp.data.ScannedQrData
 import com.example.stockapp.data.StockRepository
 import com.example.stockapp.data.local.StockItem
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,26 +17,88 @@ class CreateStockViewModel(private val repository: StockRepository) : ViewModel(
     private val _scannedItems = MutableStateFlow<List<StockItem>>(emptyList())
     val scannedItems = _scannedItems.asStateFlow()
 
+    private val _pendingItem = MutableStateFlow<StockItem?>(null)
+    val pendingItem = _pendingItem.asStateFlow()
+    private val _lastSid = MutableStateFlow("")
+    val lastSid = _lastSid.asStateFlow()
+    private var lastLocationForSid: String = ""
+
     fun addScannedItem(barcode: String) {
+        if (_pendingItem.value != null) {
+            return
+        }
+
+        Log.d("Scanner", "Scanned barcode: $barcode")
         try {
-            val item = Json.decodeFromString<StockItem>(barcode)
-            val currentList = _scannedItems.value.toMutableList()
-            if (currentList.none { it.itemId == item.itemId }) {
-                currentList.add(item)
-                _scannedItems.value = currentList
-            }
+            val scannedData = Json.decodeFromString<ScannedQrData>(barcode)
+            val newItem = StockItem(
+                itemId = scannedData.itemId,
+                description = scannedData.description,
+                quantity = scannedData.quantity,
+                location = "",
+                stockCode = "",
+                stockTakeId = ""
+            )
+            _pendingItem.value = newItem
         } catch (e: Exception) {
-            // Handle decoding error if necessary
+            Log.e("Scanner", "Error decoding barcode", e)
         }
     }
 
-    fun saveScannedItems(location: String, stockTakeId: String, stockCode: String) {
+    fun confirmPendingItem(location: String, stockTakeId: String) {
+        val pending = _pendingItem.value ?: return
+
         viewModelScope.launch {
-            val itemsToSave = _scannedItems.value.map {
-                it.copy(location = location, stockTakeId = stockTakeId, stockCode = stockCode)
+            val sid = if (_lastSid.value.isBlank()) generateSid() else _lastSid.value
+            _lastSid.value = sid
+            val itemToSave = pending.copy(
+                location = location,
+                stockTakeId = stockTakeId,
+                stockCode = sid
+            )
+
+            repository.insert(itemToSave)
+
+            val currentList = _scannedItems.value.toMutableList()
+            val existingItem = currentList.find { it.itemId == itemToSave.itemId }
+
+            if (existingItem != null) {
+                val updatedItem = existingItem.copy(quantity = existingItem.quantity + itemToSave.quantity)
+                val index = currentList.indexOf(existingItem)
+                currentList[index] = updatedItem
+            } else {
+                currentList.add(itemToSave)
             }
-            repository.insertAll(itemsToSave)
-            _scannedItems.value = emptyList()
+            _scannedItems.value = currentList
+            _pendingItem.value = null
+            _lastSid.value = sid
         }
+    }
+
+    fun clearScannedItems() {
+        _pendingItem.value = null
+        _scannedItems.value = emptyList()
+        _lastSid.value = ""
+        lastLocationForSid = ""
+    }
+
+    fun updateSidForLocation(location: String) {
+        if (location.isBlank()) {
+            _lastSid.value = ""
+            lastLocationForSid = ""
+            return
+        }
+
+        if (location != lastLocationForSid) {
+            _lastSid.value = generateSid()
+            lastLocationForSid = location
+        }
+    }
+
+    private fun generateSid(): String {
+        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        return (1..6)
+            .map { chars.random() }
+            .joinToString("")
     }
 }
