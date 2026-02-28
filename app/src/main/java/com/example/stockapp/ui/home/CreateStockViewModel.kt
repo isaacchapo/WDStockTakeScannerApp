@@ -12,7 +12,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
-class CreateStockViewModel(private val repository: StockRepository) : ViewModel() {
+class CreateStockViewModel(
+    private val repository: StockRepository,
+    private val ownerUid: String
+) : ViewModel() {
 
     private val _scannedItems = MutableStateFlow<List<StockItem>>(emptyList())
     val scannedItems = _scannedItems.asStateFlow()
@@ -37,7 +40,8 @@ class CreateStockViewModel(private val repository: StockRepository) : ViewModel(
                 quantity = scannedData.quantity,
                 location = "",
                 stockCode = "",
-                stockTakeId = ""
+                stockTakeId = "",
+                ownerUid = ownerUid
             )
             _pendingItem.value = newItem
         } catch (e: Exception) {
@@ -46,6 +50,9 @@ class CreateStockViewModel(private val repository: StockRepository) : ViewModel(
     }
 
     fun confirmPendingItem(location: String, stockTakeId: String) {
+        if (ownerUid.isBlank()) {
+            return
+        }
         val pending = _pendingItem.value ?: return
 
         viewModelScope.launch {
@@ -54,7 +61,8 @@ class CreateStockViewModel(private val repository: StockRepository) : ViewModel(
             val itemToSave = pending.copy(
                 location = location,
                 stockTakeId = stockTakeId,
-                stockCode = sid
+                stockCode = sid,
+                ownerUid = ownerUid
             )
 
             repository.insert(itemToSave)

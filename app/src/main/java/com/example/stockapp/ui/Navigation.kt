@@ -28,20 +28,30 @@ fun Navigation() {
     val stockViewModel: StockViewModel = viewModel(
         factory = StockViewModelFactory(application.repository)
     )
+    val navigateAndClearBackStack: (String) -> Unit = { route ->
+        navController.navigate(route) {
+            popUpTo(navController.graph.id) { inclusive = true }
+            launchSingleTop = true
+        }
+    }
 
     NavHost(navController = navController, startDestination = "login") {
         composable("login") {
             val loginResult by stockViewModel.loginResult.collectAsState()
+            val loginInProgress by stockViewModel.loginInProgress.collectAsState()
             var showError by remember { mutableStateOf(false) }
             var currentUid by remember { mutableStateOf("") }
+
+            LaunchedEffect(Unit) {
+                stockViewModel.clearActiveUser()
+            }
 
             LaunchedEffect(loginResult) {
                 when (loginResult) {
                     true -> {
                         showError = false
-                        navController.navigate("home/$currentUid") { 
-                            popUpTo("login") { inclusive = true }
-                        }
+                        stockViewModel.setActiveUser(currentUid)
+                        navigateAndClearBackStack("home/$currentUid")
                         stockViewModel.resetLoginResult()
                     }
                     false -> {
@@ -61,7 +71,8 @@ fun Navigation() {
                     stockViewModel.resetLoginResult()
                     navController.navigate("create_account") 
                 },
-                showError = showError
+                showError = showError,
+                isLoading = loginInProgress
             )
         }
         composable("create_account") {
@@ -73,27 +84,39 @@ fun Navigation() {
         composable("home/{uid}") { backStackEntry ->
             val uid = backStackEntry.arguments?.getString("uid") ?: ""
             val context = LocalContext.current
+            LaunchedEffect(uid) {
+                stockViewModel.setActiveUser(uid)
+            }
             val stockItems by stockViewModel.allStockItems.collectAsState()
             HomeScreen(
                 loggedInUser = uid,
                 onCreateStockCard = { navController.navigate("create_stock/$uid") },
-                onViewStockCard = { navController.navigate("view_stock_card") },
+                onViewStockCard = { navController.navigate("view_stock_card/$uid") },
                 onShare = { shareStockDataAsPdf(context, stockItems) },
                 onLogout = {
-                    navController.navigate("login") {
-                        popUpTo("login") { inclusive = true }
-                    }
+                    stockViewModel.clearActiveUser()
+                    stockViewModel.resetLoginResult()
+                    navigateAndClearBackStack("login")
                 }
             )
         }
         composable("create_stock/{uid}") { backStackEntry ->
             val uid = backStackEntry.arguments?.getString("uid") ?: ""
+            LaunchedEffect(uid) {
+                stockViewModel.setActiveUser(uid)
+            }
             CreateStockCardScreen(
                 loggedInUser = uid,
-                createStockViewModel = viewModel(factory = CreateStockViewModelFactory(application.repository))
+                createStockViewModel = viewModel(
+                    factory = CreateStockViewModelFactory(application.repository, uid)
+                )
             )
         }
-        composable("view_stock_card") {
+        composable("view_stock_card/{uid}") { backStackEntry ->
+            val uid = backStackEntry.arguments?.getString("uid") ?: ""
+            LaunchedEffect(uid) {
+                stockViewModel.setActiveUser(uid)
+            }
             ViewStockCardScreen(stockViewModel = stockViewModel)
         }
     }

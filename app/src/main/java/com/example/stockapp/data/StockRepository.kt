@@ -5,6 +5,9 @@ import com.example.stockapp.data.local.StockItem
 import com.example.stockapp.data.local.StockItemDao
 import com.example.stockapp.data.local.User
 import com.example.stockapp.data.local.UserDao
+import com.example.stockapp.data.remote.StockInventoryUploadRequest
+import com.example.stockapp.data.remote.StockUploadClient
+import com.example.stockapp.data.remote.StockUploadItemDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import java.security.MessageDigest
@@ -13,16 +16,17 @@ import java.security.MessageDigest
  * A repository that handles data operations.
  */
 class StockRepository(private val stockItemDao: StockItemDao, private val userDao: UserDao) {
+    private val stockUploadClient = StockUploadClient()
 
     /**
      * A flow of all stock items from the database.
      */
-    val allStockItems: Flow<List<StockItem>> = stockItemDao.getAllStockItems()
+    fun getAllStockItems(ownerUid: String): Flow<List<StockItem>> = stockItemDao.getAllStockItems(ownerUid)
 
     /**
      * A flow of inventory groups (Location + UID + SID).
      */
-    val inventoryGroups: Flow<List<InventoryGroup>> = stockItemDao.getInventoryGroups()
+    fun getInventoryGroups(ownerUid: String): Flow<List<InventoryGroup>> = stockItemDao.getInventoryGroups(ownerUid)
 
     /**
      * Inserts a stock item into the database.
@@ -44,11 +48,93 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
      * @return a flow of stock items for a specific inventory group.
      */
     fun getItemsForGroup(
+        ownerUid: String,
         location: String,
         stockTakeId: String,
         stockCode: String
     ): Flow<List<StockItem>> {
-        return stockItemDao.getItemsForGroup(location, stockTakeId, stockCode)
+        return stockItemDao.getItemsForGroup(ownerUid, location, stockTakeId, stockCode)
+    }
+
+    suspend fun updateGroup(
+        ownerUid: String,
+        oldLocation: String,
+        oldStockTakeId: String,
+        oldStockCode: String,
+        newLocation: String,
+        newStockTakeId: String,
+        newStockCode: String
+    ) {
+        stockItemDao.updateGroup(
+            ownerUid,
+            oldLocation,
+            oldStockTakeId,
+            oldStockCode,
+            newLocation,
+            newStockTakeId,
+            newStockCode
+        )
+    }
+
+    suspend fun deleteGroup(
+        ownerUid: String,
+        location: String,
+        stockTakeId: String,
+        stockCode: String
+    ) {
+        stockItemDao.deleteGroup(ownerUid, location, stockTakeId, stockCode)
+    }
+
+    suspend fun updateStockItem(
+        ownerUid: String,
+        stockItem: StockItem
+    ) {
+        stockItemDao.updateStockItem(
+            ownerUid = ownerUid,
+            id = stockItem.id,
+            itemId = stockItem.itemId,
+            description = stockItem.description,
+            quantity = stockItem.quantity,
+            location = stockItem.location,
+            stockCode = stockItem.stockCode,
+            stockTakeId = stockItem.stockTakeId
+        )
+    }
+
+    suspend fun deleteStockItem(
+        ownerUid: String,
+        stockItemId: Int
+    ) {
+        stockItemDao.deleteStockItem(ownerUid, stockItemId)
+    }
+
+    suspend fun uploadInventory(
+        baseUrl: String,
+        endpointPath: String,
+        ownerUid: String,
+        inventoryGroup: InventoryGroup?,
+        stockItems: List<StockItem>
+    ): Result<String> {
+        val scopedItems = stockItems.filter { it.ownerUid.isBlank() || it.ownerUid == ownerUid }
+        if (scopedItems.isEmpty()) {
+            return Result.failure(IllegalArgumentException("No stock items found to upload."))
+        }
+
+        val urlResult = stockUploadClient.buildUploadUrl(baseUrl, endpointPath)
+        val uploadUrl = urlResult.getOrElse { return Result.failure(it) }
+
+        val firstItem = scopedItems.first()
+        val request = StockInventoryUploadRequest(
+            ownerUid = ownerUid,
+            location = inventoryGroup?.location ?: firstItem.location,
+            stockTakeId = inventoryGroup?.stockTakeId ?: firstItem.stockTakeId,
+            stockCode = inventoryGroup?.stockCode ?: firstItem.stockCode,
+            items = scopedItems.map { item ->
+                item.toUploadDto(ownerUid)
+            }
+        )
+
+        return stockUploadClient.uploadInventory(uploadUrl, request)
     }
 
     /**
@@ -78,14 +164,6 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
     }
 
     /**
-     * @param uid The unique identifier of the user.
-     * @return a flow of the user from the database.
-     */
-    fun getUser(uid: String): Flow<User?> {
-        return userDao.getUser(uid)
-    }
-
-    /**
      * Hashes a password using SHA-256.
      * @param password The password to be hashed.
      * @return The hashed password.
@@ -96,4 +174,16 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
         val digest = md.digest(bytes)
         return digest.fold("") { str, it -> str + "%02x".format(it) }
     }
+}
+
+private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
+    return StockUploadItemDto(
+        itemId = itemId,
+        description = description,
+        quantity = quantity,
+        location = location,
+        stockCode = stockCode,
+        stockTakeId = stockTakeId,
+        ownerUid = ownerUid
+    )
 }

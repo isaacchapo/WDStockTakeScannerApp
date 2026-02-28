@@ -14,6 +14,7 @@ import kotlinx.serialization.Serializable
  * @property location The location of the stock item in the warehouse.
  * @property stockCode The stock code of the item.
  * @property stockTakeId The unique identifier for the stock take.
+ * @property ownerUid The account that owns this stock record.
  */
 @Serializable
 @Entity(tableName = "stock_table")
@@ -25,5 +26,6 @@ data class StockItem(
     @SerialName("currentStock") val quantity: Int,
     val location: String,
     val stockCode: String,
-    val stockTakeId: String
+    val stockTakeId: String,
+    val ownerUid: String = ""
 )

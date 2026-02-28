@@ -10,7 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 /**
  * The Room database for this app.
  */
-@Database(entities = [StockItem::class, User::class], version = 8, exportSchema = false)
+@Database(entities = [StockItem::class, User::class], version = 9, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     /**
@@ -42,7 +42,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stock_database"
                 )
-                .addMigrations(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                 .build()
                 INSTANCE = instance
                 instance
@@ -78,6 +78,16 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE stock_table RENAME COLUMN name TO description")
+            }
+        }
+
+        /**
+         * Migration from version 8 to 9.
+         */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE stock_table ADD COLUMN ownerUid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE stock_table SET ownerUid = stockTakeId WHERE ownerUid = ''")
             }
         }
     }

@@ -35,7 +35,8 @@ fun CreateStockCardScreen(
     loggedInUser: String,
     createStockViewModel: CreateStockViewModel = viewModel(
         factory = CreateStockViewModelFactory(
-            (LocalContext.current.applicationContext as StockApplication).repository
+            (LocalContext.current.applicationContext as StockApplication).repository,
+            loggedInUser
         )
     )
 ) {
