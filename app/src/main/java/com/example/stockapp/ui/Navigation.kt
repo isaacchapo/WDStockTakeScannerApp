@@ -107,6 +107,7 @@ fun Navigation() {
             }
             CreateStockCardScreen(
                 loggedInUser = uid,
+                onBack = { navController.popBackStack() },
                 createStockViewModel = viewModel(
                     factory = CreateStockViewModelFactory(application.repository, uid)
                 )
@@ -117,7 +118,10 @@ fun Navigation() {
             LaunchedEffect(uid) {
                 stockViewModel.setActiveUser(uid)
             }
-            ViewStockCardScreen(stockViewModel = stockViewModel)
+            ViewStockCardScreen(
+                stockViewModel = stockViewModel,
+                onBack = { navController.popBackStack() }
+            )
         }
     }
 }

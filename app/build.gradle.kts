@@ -83,6 +83,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.3.3")
     implementation("androidx.camera:camera-view:1.3.3")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
     // Navigation
     implementation("androidx.navigation:navigation-compose:2.7.7")

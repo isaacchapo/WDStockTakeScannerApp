@@ -1,9 +1,11 @@
 package com.example.stockapp.ui.camera
 
 import android.view.ViewGroup
+import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.CameraInfoUnavailableException
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.border
@@ -28,7 +30,10 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 @Composable
-fun CameraScreen(onBarcodeScanned: (String) -> Unit) {
+fun CameraScreen(
+    onBarcodeScanned: (String) -> Unit,
+    onScannerError: (String) -> Unit = {}
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -46,6 +51,7 @@ fun CameraScreen(onBarcodeScanned: (String) -> Unit) {
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -59,7 +65,20 @@ fun CameraScreen(onBarcodeScanned: (String) -> Unit) {
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
 
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                    val cameraSelector = try {
+                        when {
+                            cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                            cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                            else -> {
+                                onScannerError("No available camera was found on this device.")
+                                return@addListener
+                            }
+                        }
+                    } catch (e: CameraInfoUnavailableException) {
+                        Log.e("CameraScreen", "Unable to check camera availability", e)
+                        onScannerError("Unable to access camera information on this device.")
+                        return@addListener
+                    }
 
                     val options = BarcodeScannerOptions.Builder()
                         .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
@@ -71,23 +90,30 @@ fun CameraScreen(onBarcodeScanned: (String) -> Unit) {
                         .build()
                         .also {
                             it.setAnalyzer(cameraExecutor) { imageProxy ->
-                                imageProxy.image?.let { image ->
-                                    val inputImage = InputImage.fromMediaImage(
-                                        image,
-                                        imageProxy.imageInfo.rotationDegrees
-                                    )
-                                    scanner.process(inputImage)
-                                        .addOnSuccessListener { barcodes ->
-                                            if (barcodes.isNotEmpty()) {
-                                                barcodes.firstOrNull()?.rawValue?.let { barcode ->
-                                                    onBarcodeScanned(barcode)
-                                                }
+                                val image = imageProxy.image
+                                if (image == null) {
+                                    imageProxy.close()
+                                    return@setAnalyzer
+                                }
+
+                                val inputImage = InputImage.fromMediaImage(
+                                    image,
+                                    imageProxy.imageInfo.rotationDegrees
+                                )
+                                scanner.process(inputImage)
+                                    .addOnSuccessListener { barcodes ->
+                                        if (barcodes.isNotEmpty()) {
+                                            barcodes.firstOrNull()?.rawValue?.let { barcode ->
+                                                onBarcodeScanned(barcode)
                                             }
                                         }
-                                        .addOnCompleteListener {
-                                            imageProxy.close()
-                                        }
-                                }
+                                    }
+                                    .addOnFailureListener { error ->
+                                        Log.e("CameraScreen", "Frame scan failed", error)
+                                    }
+                                    .addOnCompleteListener {
+                                        imageProxy.close()
+                                    }
                             }
                         }
 
@@ -100,7 +126,8 @@ fun CameraScreen(onBarcodeScanned: (String) -> Unit) {
                             imageAnalysis
                         )
                     } catch (exc: Exception) {
-                        // Log or handle camera-binding exceptions
+                        Log.e("CameraScreen", "Failed to bind camera use cases", exc)
+                        onScannerError("Unable to start camera scanner on this device.")
                     }
                 }, ContextCompat.getMainExecutor(ctx))
 
@@ -120,6 +147,13 @@ fun CameraScreen(onBarcodeScanned: (String) -> Unit) {
     // Ensure the camera executor is shut down when the composable is disposed
     DisposableEffect(Unit) {
         onDispose {
+            try {
+                if (cameraProviderFuture.isDone) {
+                    cameraProviderFuture.get().unbindAll()
+                }
+            } catch (e: Exception) {
+                Log.w("CameraScreen", "Failed to unbind camera provider on dispose", e)
+            }
             cameraExecutor.shutdown()
         }
     }

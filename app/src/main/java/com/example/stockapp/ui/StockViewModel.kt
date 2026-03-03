@@ -62,24 +62,6 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     val loginInProgress = _loginInProgress.asStateFlow()
 
     /**
-     * Inserts a stock item into the database.
-     * @param stockItem The stock item to be inserted.
-     */
-    fun insert(stockItem: StockItem) = viewModelScope.launch {
-        val ownerUid = _activeUserUid.value ?: return@launch
-        repository.insert(stockItem.copy(ownerUid = ownerUid))
-    }
-
-    /**
-     * Inserts a list of stock items into the database.
-     * @param stockItems The list of stock items to be inserted.
-     */
-    fun insertAll(stockItems: List<StockItem>) = viewModelScope.launch {
-        val ownerUid = _activeUserUid.value ?: return@launch
-        repository.insertAll(stockItems.map { it.copy(ownerUid = ownerUid) })
-    }
-
-    /**
      * Creates a new user and inserts it into the database.
      * @param uid The unique identifier for the user.
      * @param password The user's password.
@@ -147,7 +129,6 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     suspend fun uploadInventory(
         baseUrl: String,
         endpointPath: String,
-        inventoryGroup: InventoryGroup?,
         stockItems: List<StockItem>
     ): Result<String> {
         val ownerUid = _activeUserUid.value
@@ -156,7 +137,6 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
             baseUrl = baseUrl,
             endpointPath = endpointPath,
             ownerUid = ownerUid,
-            inventoryGroup = inventoryGroup,
             stockItems = stockItems
         )
     }

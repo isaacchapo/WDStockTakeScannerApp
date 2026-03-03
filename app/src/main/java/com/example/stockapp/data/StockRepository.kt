@@ -5,7 +5,6 @@ import com.example.stockapp.data.local.StockItem
 import com.example.stockapp.data.local.StockItemDao
 import com.example.stockapp.data.local.User
 import com.example.stockapp.data.local.UserDao
-import com.example.stockapp.data.remote.StockInventoryUploadRequest
 import com.example.stockapp.data.remote.StockUploadClient
 import com.example.stockapp.data.remote.StockUploadItemDto
 import kotlinx.coroutines.flow.Flow
@@ -112,7 +111,6 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
         baseUrl: String,
         endpointPath: String,
         ownerUid: String,
-        inventoryGroup: InventoryGroup?,
         stockItems: List<StockItem>
     ): Result<String> {
         val scopedItems = stockItems.filter { it.ownerUid.isBlank() || it.ownerUid == ownerUid }
@@ -123,18 +121,8 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
         val urlResult = stockUploadClient.buildUploadUrl(baseUrl, endpointPath)
         val uploadUrl = urlResult.getOrElse { return Result.failure(it) }
 
-        val firstItem = scopedItems.first()
-        val request = StockInventoryUploadRequest(
-            ownerUid = ownerUid,
-            location = inventoryGroup?.location ?: firstItem.location,
-            stockTakeId = inventoryGroup?.stockTakeId ?: firstItem.stockTakeId,
-            stockCode = inventoryGroup?.stockCode ?: firstItem.stockCode,
-            items = scopedItems.map { item ->
-                item.toUploadDto(ownerUid)
-            }
-        )
-
-        return stockUploadClient.uploadInventory(uploadUrl, request)
+        val itemPayload = scopedItems.map { item -> item.toUploadDto(ownerUid) }
+        return stockUploadClient.uploadInventory(uploadUrl, itemPayload)
     }
 
     /**
@@ -180,7 +168,7 @@ private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
     return StockUploadItemDto(
         itemId = itemId,
         description = description,
-        quantity = quantity,
+        qty = quantity,
         location = location,
         stockCode = stockCode,
         stockTakeId = stockTakeId,
