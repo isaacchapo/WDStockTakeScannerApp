@@ -13,6 +13,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -68,12 +70,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.stockapp.StockApplication
 import com.example.stockapp.data.QrDataParser
@@ -150,11 +157,22 @@ fun CreateStockCardScreen(
     var addLocationDraft by remember { mutableStateOf("") }
     var isTopCardCollapsed by remember { mutableStateOf(false) }
     var selectedScannedItemId by remember { mutableStateOf<String?>(null) }
+    var showExitSessionPrompt by remember { mutableStateOf(false) }
+    var tableTopInRoot by remember { mutableStateOf(0f) }
+    var tableLeftInRoot by remember { mutableStateOf(0f) }
+    var tableWidthPx by remember { mutableStateOf(0) }
+    var selectedRowTopPx by remember { mutableStateOf<Int?>(null) }
+    var selectedRowLeftPx by remember { mutableStateOf<Int?>(null) }
+    var selectedRowWidthPx by remember { mutableStateOf<Int?>(null) }
 
     val scannedItems by createStockViewModel.scannedItems.collectAsState()
     val currentSid by createStockViewModel.currentSid.collectAsState()
     val savedLocations by createStockViewModel.savedLocations.collectAsState()
     val isSaving by createStockViewModel.isSaving.collectAsState()
+    val selectedScannedItem = scannedItems.firstOrNull { it.id == selectedScannedItemId }
+    val density = LocalDensity.current
+    val overlayWidthPx = with(density) { 236.dp.roundToPx() }
+    val overlayVerticalShiftPx = with(density) { 4.dp.roundToPx() }
 
     var location by remember { mutableStateOf("") }
 
@@ -166,6 +184,22 @@ fun CreateStockCardScreen(
         isScanning && isPaused -> "Paused"
         isScanning -> "Scanning"
         else -> "Ready"
+    }
+
+    fun requestExitNavigation() {
+        if (isScanning || isPaused) {
+            showExitSessionPrompt = true
+        } else {
+            onBack()
+        }
+    }
+
+    BackHandler {
+        when {
+            showAddLocationForm -> showAddLocationForm = false
+            showExitSessionPrompt -> showExitSessionPrompt = false
+            else -> requestExitNavigation()
+        }
     }
 
     fun applyScanResult(rawValue: String) {
@@ -224,7 +258,7 @@ fun CreateStockCardScreen(
             .background(Color(0xFFF4F7FA))
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            CreateStockTopBar(onBack = onBack)
+            CreateStockTopBar(onBack = { requestExitNavigation() })
 
             Column(
                 modifier = Modifier
@@ -320,12 +354,17 @@ fun CreateStockCardScreen(
                     val previewColumns = remember(scannedItems) {
                         resolvePreviewColumns(scannedItems)
                     }
-                    val selectedScannedItem = scannedItems.firstOrNull { it.id == selectedScannedItemId }
 
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(horizontal = 10.dp, vertical = 10.dp)
+                            .onGloballyPositioned { coordinates ->
+                                val rootPosition = coordinates.positionInRoot()
+                                tableTopInRoot = rootPosition.y
+                                tableLeftInRoot = rootPosition.x
+                                tableWidthPx = coordinates.size.width
+                            }
                     ) {
                         Column(
                             modifier = Modifier.fillMaxSize()
@@ -394,8 +433,23 @@ fun CreateStockCardScreen(
                                                     if (isSelected) Color(0xFF90CAF9) else Color(0xFFE2E8F0),
                                                     RoundedCornerShape(8.dp)
                                                 )
+                                                .onGloballyPositioned { coordinates ->
+                                                    if (isSelected) {
+                                                        val rowPosition = coordinates.positionInRoot()
+                                                        selectedRowTopPx = (rowPosition.y - tableTopInRoot).toInt()
+                                                        selectedRowLeftPx = (rowPosition.x - tableLeftInRoot).toInt()
+                                                        selectedRowWidthPx = coordinates.size.width
+                                                    }
+                                                }
                                                 .clickable {
-                                                    selectedScannedItemId = if (isSelected) null else item.id
+                                                    selectedScannedItemId = if (isSelected) {
+                                                        selectedRowTopPx = null
+                                                        selectedRowLeftPx = null
+                                                        selectedRowWidthPx = null
+                                                        null
+                                                    } else {
+                                                        item.id
+                                                    }
                                                 }
                                                 .padding(horizontal = 8.dp, vertical = 7.dp),
                                             verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -434,17 +488,39 @@ fun CreateStockCardScreen(
                             }
                         }
 
-                        if (selectedScannedItem != null) {
+                        if (
+                            selectedScannedItem != null &&
+                            selectedRowTopPx != null &&
+                            selectedRowLeftPx != null &&
+                            selectedRowWidthPx != null
+                        ) {
                             DeleteRecordOverlayPrompt(
                                 modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 6.dp),
+                                    .align(Alignment.TopStart)
+                                    .offset {
+                                        val rowTop = selectedRowTopPx ?: 0
+                                        val rowLeft = selectedRowLeftPx ?: 0
+                                        val rowWidth = selectedRowWidthPx ?: 0
+                                        val maxX = (tableWidthPx - overlayWidthPx).coerceAtLeast(0)
+                                        val centeredX = rowLeft + ((rowWidth - overlayWidthPx) / 2)
+                                        IntOffset(
+                                            x = centeredX.coerceIn(0, maxX),
+                                            y = (rowTop - overlayVerticalShiftPx).coerceAtLeast(0)
+                                        )
+                                    }
+                                    .zIndex(2f),
                                 onConfirmDelete = {
                                     createStockViewModel.removeScannedItem(selectedScannedItem.id)
                                     selectedScannedItemId = null
+                                    selectedRowTopPx = null
+                                    selectedRowLeftPx = null
+                                    selectedRowWidthPx = null
                                 },
                                 onCancel = {
                                     selectedScannedItemId = null
+                                    selectedRowTopPx = null
+                                    selectedRowLeftPx = null
+                                    selectedRowWidthPx = null
                                 }
                             )
                         }
@@ -579,6 +655,76 @@ fun CreateStockCardScreen(
                 }
             }
         )
+    }
+
+    if (showExitSessionPrompt) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.28f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Do you want to proceed? This will cancel the current stock take session",
+                        color = Color(0xFF102A43),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = { showExitSessionPrompt = false }
+                        ) {
+                            Text(
+                                text = "Cancel",
+                                color = Color(0xFF546E7A),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(
+                            onClick = {
+                                showExitSessionPrompt = false
+                                isScanning = false
+                                isPaused = false
+                                scannerMessage = null
+                                selectedScannedItemId = null
+                                selectedRowTopPx = null
+                                selectedRowLeftPx = null
+                                selectedRowWidthPx = null
+                                context.sendBroadcast(Intent("com.android.scanner.DISABLED"))
+                                createStockViewModel.clearScannedItems(resetSession = true)
+                                onBack()
+                            }
+                        ) {
+                            Text(
+                                text = "Proceed",
+                                color = Color(0xFF0A4A99),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
