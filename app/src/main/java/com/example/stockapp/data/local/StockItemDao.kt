@@ -27,81 +27,125 @@ interface StockItemDao {
     suspend fun insertAll(stockItems: List<StockItem>)
 
     /**
-     * @return a flow of all stock items from the table, ordered by description in descending order.
+     * @return a flow of all stock items from the table, ordered by date scanned in descending order.
      */
-    @Query("SELECT * FROM stock_table WHERE ownerUid = :ownerUid ORDER BY description DESC")
+    @Query("SELECT * FROM stock_table WHERE ownerUid = :ownerUid ORDER BY dateScanned DESC")
     fun getAllStockItems(ownerUid: String): Flow<List<StockItem>>
 
     /**
-     * @return a flow of inventory groups (Location + UID + SID).
+     * @return a flow of table groups identified by SID + UID + location.
      */
     @Query(
-        "SELECT DISTINCT location, stockTakeId, stockCode FROM stock_table " +
-            "WHERE ownerUid = :ownerUid ORDER BY location, stockCode"
+        "SELECT ownerUid, location, sid, " +
+            "COUNT(*) AS totalRecords, " +
+            "COUNT(DISTINCT identifierKey) AS schemaCount, " +
+            "MAX(dateScanned) AS lastScannedAt " +
+            "FROM stock_table " +
+            "WHERE ownerUid = :ownerUid " +
+            "GROUP BY ownerUid, location, sid " +
+            "ORDER BY lastScannedAt DESC, sid ASC, location COLLATE NOCASE ASC"
     )
     fun getInventoryGroups(ownerUid: String): Flow<List<InventoryGroup>>
 
     /**
-     * @return a flow of stock items for a specific inventory group.
+     * @return a flow of all records for a table group.
      */
     @Query(
         "SELECT * FROM stock_table " +
             "WHERE ownerUid = :ownerUid AND location = :location " +
-            "AND stockTakeId = :stockTakeId AND stockCode = :stockCode " +
-            "ORDER BY description DESC"
+            "AND sid = :sid " +
+            "ORDER BY dateScanned DESC"
     )
-    fun getItemsForGroup(
+    fun getItemsForTable(
         ownerUid: String,
         location: String,
-        stockTakeId: String,
-        stockCode: String
+        sid: String
+    ): Flow<List<StockItem>>
+
+    /**
+     * @return a flow of schema groups inside a selected table.
+     */
+    @Query(
+        "SELECT sid, ownerUid, location, " +
+            "identifierKey AS schemaId, " +
+            "MIN(variableData) AS sampleData, " +
+            "COUNT(*) AS totalRecords, " +
+            "MAX(dateScanned) AS lastScannedAt " +
+            "FROM stock_table " +
+            "WHERE ownerUid = :ownerUid AND location = :location AND sid = :sid " +
+            "GROUP BY sid, ownerUid, location, identifierKey " +
+            "ORDER BY lastScannedAt DESC, schemaId ASC"
+    )
+    fun getSchemaGroups(
+        ownerUid: String,
+        location: String,
+        sid: String
+    ): Flow<List<SchemaGroup>>
+
+    /**
+     * @return a flow of stock items for a specific schema inside a table.
+     */
+    @Query(
+        "SELECT * FROM stock_table " +
+            "WHERE ownerUid = :ownerUid AND location = :location " +
+            "AND sid = :sid AND identifierKey = :schemaId " +
+            "ORDER BY dateScanned DESC"
+    )
+    fun getItemsForSchema(
+        ownerUid: String,
+        location: String,
+        sid: String,
+        schemaId: String
     ): Flow<List<StockItem>>
 
     @Query(
-        "UPDATE stock_table SET location = :newLocation, stockTakeId = :newStockTakeId, stockCode = :newStockCode " +
+        "UPDATE stock_table SET location = :newLocation " +
             "WHERE ownerUid = :ownerUid AND location = :oldLocation " +
-            "AND stockTakeId = :oldStockTakeId AND stockCode = :oldStockCode"
+            "AND sid = :oldSid"
     )
-    suspend fun updateGroup(
+    suspend fun updateTableLocation(
         ownerUid: String,
         oldLocation: String,
-        oldStockTakeId: String,
-        oldStockCode: String,
-        newLocation: String,
-        newStockTakeId: String,
-        newStockCode: String
+        oldSid: String,
+        newLocation: String
     )
 
     @Query(
         "DELETE FROM stock_table WHERE ownerUid = :ownerUid AND location = :location " +
-            "AND stockTakeId = :stockTakeId AND stockCode = :stockCode"
+            "AND sid = :sid"
     )
-    suspend fun deleteGroup(
+    suspend fun deleteTableGroup(
         ownerUid: String,
         location: String,
-        stockTakeId: String,
-        stockCode: String
+        sid: String
     )
 
     @Query(
-        "UPDATE stock_table SET itemId = :itemId, description = :description, quantity = :quantity, " +
-            "location = :location, stockCode = :stockCode, stockTakeId = :stockTakeId " +
+        "UPDATE stock_table SET sid = :sid, identifierKey = :identifierKey, orderNo = :orderNo, location = :location, variableData = :variableData " +
             "WHERE ownerUid = :ownerUid AND id = :id"
     )
     suspend fun updateStockItem(
         ownerUid: String,
-        id: Int,
-        itemId: String,
-        description: String,
-        quantity: Int,
+        id: String,
+        sid: String,
+        identifierKey: String,
+        orderNo: String?,
         location: String,
-        stockCode: String,
-        stockTakeId: String
+        variableData: String
     )
 
     @Query("DELETE FROM stock_table WHERE ownerUid = :ownerUid AND id = :id")
     suspend fun deleteStockItem(
         ownerUid: String,
-        id: Int
+        id: String
     )
+
+    @Query(
+        "SELECT COUNT(*) FROM stock_table " +
+            "WHERE ownerUid = :ownerUid AND lower(trim(location)) = :locationNormalized"
+    )
+    suspend fun countItemsByNormalizedLocation(
+        ownerUid: String,
+        locationNormalized: String
+    ): Int
 }

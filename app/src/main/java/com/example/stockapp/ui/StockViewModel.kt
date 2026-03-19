@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.stockapp.data.StockRepository
 import com.example.stockapp.data.local.InventoryGroup
+import com.example.stockapp.data.local.SchemaGroup
 import com.example.stockapp.data.local.StockItem
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -108,66 +109,80 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         _loginResult.value = null
     }
 
-    fun getItemsForGroup(
+    fun getItemsForTable(
         location: String,
-        stockTakeId: String,
-        stockCode: String
+        sid: String
     ): Flow<List<StockItem>> {
         val ownerUid = _activeUserUid.value ?: return flowOf(emptyList())
-        return repository.getItemsForGroup(ownerUid, location, stockTakeId, stockCode)
+        return repository.getItemsForTable(ownerUid, location, sid)
     }
 
-    suspend fun getItemsForGroupSnapshot(
+    suspend fun getItemsForTableSnapshot(
         location: String,
-        stockTakeId: String,
-        stockCode: String
+        sid: String
     ): List<StockItem> {
         val ownerUid = _activeUserUid.value ?: return emptyList()
-        return repository.getItemsForGroup(ownerUid, location, stockTakeId, stockCode).first()
+        return repository
+            .getItemsForTable(ownerUid, location, sid)
+            .first()
+    }
+
+    fun getSchemaGroups(
+        location: String,
+        sid: String
+    ): Flow<List<SchemaGroup>> {
+        val ownerUid = _activeUserUid.value ?: return flowOf(emptyList())
+        return repository.getSchemaGroups(ownerUid, location, sid)
+    }
+
+    fun getItemsForSchema(
+        location: String,
+        sid: String,
+        schemaId: String
+    ): Flow<List<StockItem>> {
+        val ownerUid = _activeUserUid.value ?: return flowOf(emptyList())
+        return repository.getItemsForSchema(ownerUid, location, sid, schemaId)
     }
 
     suspend fun uploadInventory(
         baseUrl: String,
         endpointPath: String,
-        stockItems: List<StockItem>
+        apiKey: String,
+        stockItems: List<StockItem>,
+        onProgress: suspend (current: Int, total: Int) -> Unit = { _, _ -> }
     ): Result<String> {
         val ownerUid = _activeUserUid.value
             ?: return Result.failure(IllegalStateException("No active user found."))
         return repository.uploadInventory(
             baseUrl = baseUrl,
             endpointPath = endpointPath,
+            apiKey = apiKey,
             ownerUid = ownerUid,
-            stockItems = stockItems
+            stockItems = stockItems,
+            onProgress = onProgress
         )
     }
 
-    fun updateGroup(
+    fun updateTableLocation(
         oldLocation: String,
-        oldStockTakeId: String,
-        oldStockCode: String,
-        newLocation: String,
-        newStockTakeId: String,
-        newStockCode: String
+        oldSid: String,
+        newLocation: String
     ) = viewModelScope.launch {
         val ownerUid = _activeUserUid.value ?: return@launch
-        repository.updateGroup(
+        repository.updateTableLocation(
             ownerUid,
             oldLocation,
-            oldStockTakeId,
-            oldStockCode,
-            newLocation,
-            newStockTakeId,
-            newStockCode
+            oldSid,
+            newLocation
         )
     }
 
-    fun deleteGroup(
+    fun deleteTableGroup(
         location: String,
-        stockTakeId: String,
-        stockCode: String
+        sid: String
     ) = viewModelScope.launch {
         val ownerUid = _activeUserUid.value ?: return@launch
-        repository.deleteGroup(ownerUid, location, stockTakeId, stockCode)
+        repository.deleteTableGroup(ownerUid, location, sid)
     }
 
     fun updateStockItem(stockItem: StockItem) = viewModelScope.launch {
@@ -175,7 +190,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         repository.updateStockItem(ownerUid, stockItem.copy(ownerUid = ownerUid))
     }
 
-    fun deleteStockItem(stockItemId: Int) = viewModelScope.launch {
+    fun deleteStockItem(stockItemId: String) = viewModelScope.launch {
         val ownerUid = _activeUserUid.value ?: return@launch
         repository.deleteStockItem(ownerUid, stockItemId)
     }

@@ -3,6 +3,7 @@ package com.example.stockapp.data.remote
 import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -15,6 +16,13 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
+
+data class UploadPolicy(
+    val maxRetries: Int = 2,
+    val baseDelayMs: Long = 400,
+    val maxDelayMs: Long = 2000
+)
 
 class StockUploadClient {
     private companion object {
@@ -43,30 +51,21 @@ class StockUploadClient {
     }
 
     fun buildUploadUrl(baseUrl: String, endpointPath: String): Result<String> {
-        val trimmedBase = baseUrl.trim().removeSuffix("/")
+        val trimmedBase = baseUrl.trim()
         if (trimmedBase.isBlank()) {
             return Result.failure(IllegalArgumentException("Base URL is required."))
         }
 
-        val normalizedPath = endpointPath.trim().let { path ->
-            when {
-                path.isBlank() -> ""
-                path.startsWith("/") -> path
-                else -> "/$path"
-            }
-        }
+        val parsedBase = trimmedBase.toHttpUrlOrNull()
+            ?: return Result.failure(IllegalArgumentException("Invalid URL: $trimmedBase"))
 
-        val targetUrl = "$trimmedBase$normalizedPath"
-        val parsedUrl = targetUrl.toHttpUrlOrNull()
-            ?: return Result.failure(IllegalArgumentException("Invalid URL: $targetUrl"))
-
-        if (parsedUrl.scheme != "http" && parsedUrl.scheme != "https") {
+        if (parsedBase.scheme != "http" && parsedBase.scheme != "https") {
             return Result.failure(
                 IllegalArgumentException("URL must start with http:// or https://")
             )
         }
 
-        if (isLocalHost(parsedUrl.host)) {
+        if (isLocalHost(parsedBase.host)) {
             return Result.failure(
                 IllegalArgumentException(
                     "Do not use localhost from Android. Use the API server LAN IP (for example: http://192.168.1.15:5000). For Android Emulator use http://10.0.2.2:<port>."
@@ -74,15 +73,46 @@ class StockUploadClient {
             )
         }
 
+        fun normalizePath(path: String): String {
+            if (path.isBlank() || path == "/") return "/"
+            return path.trimEnd('/')
+        }
+
+        val rawEndpointPath = endpointPath.trim()
+        val normalizedEndpoint = rawEndpointPath.takeIf { it.isNotBlank() }?.let { path ->
+            val withSlash = if (path.startsWith("/")) path else "/$path"
+            normalizePath(withSlash)
+        }.orEmpty()
+
+        val basePath = normalizePath(parsedBase.encodedPath)
+        val finalPath = when {
+            normalizedEndpoint.isBlank() -> basePath
+            basePath != "/" && (basePath == normalizedEndpoint || basePath.endsWith(normalizedEndpoint)) -> basePath
+            basePath != "/" && normalizedEndpoint.startsWith("$basePath/") -> normalizedEndpoint
+            basePath == "/" -> normalizedEndpoint
+            else -> basePath + normalizedEndpoint
+        }
+
+        val targetUrl = parsedBase.newBuilder()
+            .encodedPath(finalPath)
+            .build()
+            .toString()
+
         return Result.success(targetUrl)
     }
 
     suspend fun uploadInventory(
         uploadUrl: String,
-        items: List<StockUploadItemDto>
+        items: List<StockUploadItemDto>,
+        apiKey: String,
+        policy: UploadPolicy = UploadPolicy(),
+        onProgress: suspend (current: Int, total: Int) -> Unit = { _, _ -> }
     ): Result<String> {
         if (items.isEmpty()) {
             return Result.failure(IllegalArgumentException("No stock items found to upload."))
+        }
+        if (apiKey.isBlank()) {
+            return Result.failure(IllegalArgumentException("API key is required for upload."))
         }
 
         val parsedUrl = uploadUrl.toHttpUrlOrNull()
@@ -103,22 +133,17 @@ class StockUploadClient {
                 Log.d(TAG, "Uploading item ${index + 1}/${items.size} to $uploadUrl")
                 Log.d(TAG, "Payload: $jsonPayload")
 
-                val response = api.uploadInventory(uploadUrl, item)
-                if (!response.isSuccessful) {
-                    val errorBody = response.errorBody()?.string() ?: "No error body"
-                    Log.e(TAG, "HTTP Error ${response.code()}: $errorBody")
-                    
-                    return Result.failure(
-                        buildHttpError(
-                            uploadUrl = uploadUrl,
-                            response = response,
-                            rawErrorBody = errorBody,
-                            itemIndex = index + 1,
-                            totalItems = items.size
-                        )
-                    )
-                }
-                lastSuccessMessage = parseSuccessMessage(response)
+                val itemResult = uploadSingleWithRetry(
+                    uploadUrl = uploadUrl,
+                    apiKey = apiKey,
+                    item = item,
+                    policy = policy,
+                    itemIndex = index + 1,
+                    totalItems = items.size
+                )
+                val successMessage = itemResult.getOrElse { return Result.failure(it) }
+                lastSuccessMessage = successMessage
+                onProgress(index + 1, items.size)
             }
 
             if (items.size > 1) {
@@ -139,6 +164,57 @@ class StockUploadClient {
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error", e)
             Result.failure(e)
+        }
+    }
+
+    private suspend fun uploadSingleWithRetry(
+        uploadUrl: String,
+        apiKey: String,
+        item: StockUploadItemDto,
+        policy: UploadPolicy,
+        itemIndex: Int,
+        totalItems: Int
+    ): Result<String> {
+        var attempt = 0
+        while (true) {
+            try {
+                val response = api.uploadInventory(uploadUrl, apiKey, item)
+                if (response.isSuccessful) {
+                    return Result.success(parseSuccessMessage(response))
+                }
+
+                if (shouldRetry(response.code()) && attempt < policy.maxRetries) {
+                    delay(backoffDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs))
+                    attempt++
+                    continue
+                }
+
+                val errorBody = response.errorBody()?.string() ?: "No error body"
+                Log.e(TAG, "HTTP Error ${response.code()}: $errorBody")
+                return Result.failure(
+                    buildHttpError(
+                        uploadUrl = uploadUrl,
+                        response = response,
+                        rawErrorBody = errorBody,
+                        itemIndex = itemIndex,
+                        totalItems = totalItems
+                    )
+                )
+            } catch (e: IOException) {
+                if (attempt < policy.maxRetries) {
+                    delay(backoffDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs))
+                    attempt++
+                    continue
+                }
+                return Result.failure(
+                    IllegalStateException(
+                        "Network error while uploading item $itemIndex/$totalItems to $uploadUrl.",
+                        e
+                    )
+                )
+            } catch (e: Exception) {
+                return Result.failure(e)
+            }
         }
     }
 
@@ -176,6 +252,16 @@ class StockUploadClient {
         return IllegalStateException(
             "Upload failed at $uploadUrl$itemDetails with HTTP ${response.code()}$details"
         )
+    }
+
+    private fun shouldRetry(statusCode: Int): Boolean {
+        return statusCode == 408 || statusCode == 429 || statusCode == 500 ||
+            statusCode == 502 || statusCode == 503 || statusCode == 504
+    }
+
+    private fun backoffDelayMs(attempt: Int, baseDelayMs: Long, maxDelayMs: Long): Long {
+        val exponential = baseDelayMs * (1 shl attempt)
+        return maxDelayMs.coerceAtMost(max(exponential, baseDelayMs))
     }
 
     private suspend fun verifyHostReachable(uploadUrl: HttpUrl): Result<Unit> = withContext(Dispatchers.IO) {

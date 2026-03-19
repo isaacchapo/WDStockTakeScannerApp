@@ -19,7 +19,6 @@ import com.example.stockapp.ui.home.HomeScreen
 import com.example.stockapp.ui.home.ViewStockCardScreen
 import com.example.stockapp.ui.login.CreateAccountScreen
 import com.example.stockapp.ui.login.LoginScreen
-import com.example.stockapp.ui.sharing.shareStockDataAsPdf
 
 @Composable
 fun Navigation() {
@@ -87,12 +86,11 @@ fun Navigation() {
             LaunchedEffect(uid) {
                 stockViewModel.setActiveUser(uid)
             }
-            val stockItems by stockViewModel.allStockItems.collectAsState()
             HomeScreen(
                 loggedInUser = uid,
                 onCreateStockCard = { navController.navigate("create_stock/$uid") },
                 onViewStockCard = { navController.navigate("view_stock_card/$uid") },
-                onShare = { shareStockDataAsPdf(context, stockItems) },
+                onShare = { navController.navigate("view_stock_share/$uid") },
                 onLogout = {
                     stockViewModel.clearActiveUser()
                     stockViewModel.resetLoginResult()
@@ -120,7 +118,19 @@ fun Navigation() {
             }
             ViewStockCardScreen(
                 stockViewModel = stockViewModel,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                shareMode = false
+            )
+        }
+        composable("view_stock_share/{uid}") { backStackEntry ->
+            val uid = backStackEntry.arguments?.getString("uid") ?: ""
+            LaunchedEffect(uid) {
+                stockViewModel.setActiveUser(uid)
+            }
+            ViewStockCardScreen(
+                stockViewModel = stockViewModel,
+                onBack = { navController.popBackStack() },
+                shareMode = true
             )
         }
     }

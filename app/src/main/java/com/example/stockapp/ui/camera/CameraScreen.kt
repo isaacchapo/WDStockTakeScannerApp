@@ -3,6 +3,7 @@ package com.example.stockapp.ui.camera
 import android.view.ViewGroup
 import android.util.Log
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.CameraInfoUnavailableException
@@ -29,6 +30,7 @@ import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
+@ExperimentalGetImage
 @Composable
 fun CameraScreen(
     onBarcodeScanned: (String) -> Unit,

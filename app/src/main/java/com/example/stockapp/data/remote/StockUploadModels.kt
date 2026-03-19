@@ -3,18 +3,20 @@ package com.example.stockapp.data.remote
 import com.google.gson.annotations.SerializedName
 
 data class StockUploadItemDto(
-    @SerializedName("itemId")
-    val itemId: String,
-    @SerializedName("description")
-    val description: String,
-    @SerializedName("qty")
-    val qty: Int,
+    @SerializedName("id")
+    val id: String,
+    @SerializedName("sid")
+    val sid: String,
+    @SerializedName("identifierKey")
+    val identifierKey: String,
+    @SerializedName("orderNo")
+    val orderNo: String?,
     @SerializedName("location")
     val location: String,
-    @SerializedName("stockCode")
-    val stockCode: String,
-    @SerializedName("stockTakeId")
-    val stockTakeId: String,
+    @SerializedName("dateScanned")
+    val dateScanned: Long,
+    @SerializedName("variableData")
+    val variableData: String,
     @SerializedName("ownerUid")
     val ownerUid: String
 )

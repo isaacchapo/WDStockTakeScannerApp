@@ -6,5 +6,11 @@ import com.example.stockapp.data.local.AppDatabase
 
 class StockApplication : Application() {
     val database by lazy { AppDatabase.getDatabase(this) }
-    val repository by lazy { StockRepository(database.stockItemDao(), database.userDao()) }
+    val repository by lazy {
+        StockRepository(
+            database.stockItemDao(),
+            database.userDao(),
+            database.savedLocationDao()
+        )
+    }
 }

@@ -4,91 +4,123 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.stockapp.data.ScannedQrData
+import com.example.stockapp.data.QrDataParser
 import com.example.stockapp.data.StockRepository
+import com.example.stockapp.data.local.SavedLocation
 import com.example.stockapp.data.local.StockItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
-import org.json.JSONObject
+import java.security.SecureRandom
+import java.util.Locale
 
 class CreateStockViewModel(
     private val repository: StockRepository,
     private val ownerUid: String
 ) : ViewModel() {
-    private val scanJson = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-    }
+    data class ScanAddResult(
+        val accepted: Boolean,
+        val message: String? = null
+    )
 
     private val _scannedItems = MutableStateFlow<List<StockItem>>(emptyList())
     val scannedItems = _scannedItems.asStateFlow()
-    private val _lastSid = MutableStateFlow("")
-    val lastSid = _lastSid.asStateFlow()
+    private val _currentSid = MutableStateFlow(generateSid())
+    val currentSid = _currentSid.asStateFlow()
+    private val _savedLocations = MutableStateFlow<List<SavedLocation>>(emptyList())
+    val savedLocations = _savedLocations.asStateFlow()
     private val _isSaving = MutableStateFlow(false)
     val isSaving = _isSaving.asStateFlow()
-    private var lastLocationForSid: String = ""
     private var lastAcceptedRawScan: String = ""
     private var lastAcceptedAtMs: Long = 0L
+    private val seenScanFingerprints = linkedSetOf<String>()
 
-    fun addScannedItem(barcode: String) {
+    init {
+        viewModelScope.launch {
+            repository.getSavedLocations(ownerUid).collectLatest { locations ->
+                _savedLocations.value = locations
+            }
+        }
+    }
+
+    fun addScannedItem(barcode: String): ScanAddResult {
         val cleanedBarcode = barcode.trim()
         Log.d("Scanner", "Processing barcode: '$cleanedBarcode'")
 
         val nowMs = SystemClock.elapsedRealtime()
-        if (cleanedBarcode == lastAcceptedRawScan && nowMs - lastAcceptedAtMs < 750L) {
+        // Ignore only immediate scanner bounce repeats from a single trigger pull.
+        if (cleanedBarcode == lastAcceptedRawScan && nowMs - lastAcceptedAtMs < 250L) {
             Log.d("Scanner", "Ignoring duplicate scan payload")
-            return
+            return ScanAddResult(
+                accepted = false,
+                message = "Duplicate scan ignored."
+            )
         }
 
-        val scannedData = parseScannedPayload(cleanedBarcode)
-        if (scannedData == null) {
+        val parsedData = QrDataParser.parseQrData(cleanedBarcode)
+        if (parsedData == null) {
             Log.e("Scanner", "Error decoding barcode JSON. Raw data: '$cleanedBarcode'")
-            return
+            return ScanAddResult(
+                accepted = false,
+                message = "Invalid QR payload. Scan a valid product QR code."
+            )
+        }
+
+        val fingerprint = buildScanFingerprint(parsedData.fields, parsedData.variableData)
+        if (fingerprint.isNotBlank() && seenScanFingerprints.contains(fingerprint)) {
+            Log.d("Scanner", "Ignoring already buffered QR values")
+            return ScanAddResult(
+                accepted = false,
+                message = "Duplicate QR values ignored."
+            )
+        }
+
+        val activeSid = _currentSid.value.ifBlank {
+            val generated = generateSid()
+            _currentSid.value = generated
+            generated
         }
 
         val scannedItem = StockItem(
-            itemId = scannedData.itemId,
-            description = scannedData.description,
-            quantity = scannedData.quantity,
+            sid = activeSid,
+            identifierKey = activeSid,
+            orderNo = null,
             location = "",
-            stockCode = "",
-            stockTakeId = "",
+            dateScanned = System.currentTimeMillis(),
+            variableData = parsedData.variableData,
             ownerUid = ownerUid
         )
 
-        val currentList = _scannedItems.value.toMutableList()
-        val existingItem = currentList.find { it.itemId == scannedItem.itemId }
-        if (existingItem != null) {
-            lastAcceptedRawScan = cleanedBarcode
-            lastAcceptedAtMs = nowMs
-            Log.d(
-                "Scanner",
-                "Item ${scannedItem.itemId} already exists in temporary table. Keeping quantity fixed at ${existingItem.quantity}."
-            )
-            return
+        _scannedItems.value = _scannedItems.value + scannedItem
+        if (fingerprint.isNotBlank()) {
+            seenScanFingerprints.add(fingerprint)
         }
-
-        currentList.add(scannedItem)
-        _scannedItems.value = currentList
         lastAcceptedRawScan = cleanedBarcode
         lastAcceptedAtMs = nowMs
-        Log.d("Scanner", "Staged item in temporary scan list: ${scannedItem.itemId}")
+        Log.d("Scanner", "Staged item in temporary scan list")
+        return ScanAddResult(accepted = true)
     }
 
     fun confirmScannedItems(
         location: String,
-        stockTakeId: String,
         onComplete: (Boolean) -> Unit = {}
     ) {
-        if (ownerUid.isBlank() || _isSaving.value) {
+        val normalizedLocation = normalizeLocation(location)
+        if (
+            ownerUid.isBlank() ||
+            normalizedLocation.isBlank() ||
+            _isSaving.value
+        ) {
             onComplete(false)
             return
         }
         val tempItems = _scannedItems.value
-        if (tempItems.isEmpty()) {
+        val activeSid = _currentSid.value
+        if (
+            tempItems.isEmpty() ||
+            activeSid.isBlank()
+        ) {
             onComplete(false)
             return
         }
@@ -96,21 +128,29 @@ class CreateStockViewModel(
         viewModelScope.launch {
             _isSaving.value = true
             try {
-                val sidForThisBatch = if (_lastSid.value.isBlank()) generateSid() else _lastSid.value
+                val locationDisplayName =
+                    _savedLocations.value.firstOrNull { it.locationNormalized == normalizedLocation }?.location
+                        ?: location.trim()
+
+                repository.upsertSavedLocation(
+                    SavedLocation(
+                        ownerUid = ownerUid,
+                        locationNormalized = normalizedLocation,
+                        location = locationDisplayName,
+                        sid = activeSid
+                    )
+                )
 
                 val itemsToSave = tempItems.map { item ->
                     item.copy(
-                        location = location,
-                        stockTakeId = stockTakeId,
-                        stockCode = sidForThisBatch,
+                        sid = activeSid,
+                        location = locationDisplayName,
                         ownerUid = ownerUid
                     )
                 }
 
                 repository.insertAll(itemsToSave)
-                _scannedItems.value = emptyList()
-                // Prepare a fresh SID so the next "Confirm" creates a new inventory row/group.
-                _lastSid.value = generateSid()
+                resetActiveScanSession()
                 onComplete(true)
             } catch (e: Exception) {
                 Log.e("Scanner", "Error saving scanned items", e)
@@ -121,104 +161,145 @@ class CreateStockViewModel(
         }
     }
 
-    fun updateSidForLocation(location: String) {
-        if (location.isBlank()) {
-            _lastSid.value = ""
-            lastLocationForSid = ""
+    fun removeScannedItem(itemId: String) {
+        val currentList = _scannedItems.value.toMutableList()
+        currentList.removeAll { it.id == itemId }
+        _scannedItems.value = currentList
+        rebuildScanFingerprints(currentList)
+        if (currentList.isEmpty()) {
+            resetActiveScanSession()
+        }
+    }
+
+    fun clearScannedItems(resetSession: Boolean = false) {
+        _scannedItems.value = emptyList()
+        seenScanFingerprints.clear()
+        if (resetSession) {
+            resetActiveScanSession()
+        }
+    }
+
+    fun addLocation(rawLocation: String, onComplete: (Boolean) -> Unit = {}) {
+        if (ownerUid.isBlank()) {
+            onComplete(false)
             return
         }
 
-        if (location != lastLocationForSid) {
-            _lastSid.value = generateSid()
-            lastLocationForSid = location
-        }
-    }
-
-    private fun generateSid(): String {
-        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        return (1..6)
-            .map { chars.random() }
-            .joinToString("")
-    }
-
-    private fun parseScannedPayload(rawValue: String): ScannedQrData? {
-        val trimmed = rawValue.trim().removePrefix("\uFEFF")
-        if (trimmed.isBlank()) return null
-
-        val candidates = linkedSetOf<String>()
-        candidates.add(trimmed)
-
-        val noParens = unwrapSurroundingParentheses(trimmed)
-        if (noParens.isNotBlank()) candidates.add(noParens)
-
-        extractJsonObject(trimmed)?.let(candidates::add)
-        extractJsonObject(noParens)?.let(candidates::add)
-
-        decodeQuotedJson(trimmed)?.let { decoded ->
-            candidates.add(decoded)
-            extractJsonObject(decoded)?.let(candidates::add)
+        val trimmedLocation = rawLocation.trim()
+        val normalized = normalizeLocation(trimmedLocation)
+        if (normalized.isBlank()) {
+            onComplete(false)
+            return
         }
 
-        for (candidate in candidates) {
-            parseJsonCandidate(candidate)?.let { return it }
+        val existing = _savedLocations.value.firstOrNull { it.locationNormalized == normalized }
+        if (existing != null) {
+            onComplete(true)
+            return
         }
-        return null
-    }
 
-    private fun parseJsonCandidate(candidate: String): ScannedQrData? {
-        runCatching { scanJson.decodeFromString<ScannedQrData>(candidate) }
-            .getOrNull()
-            ?.let { return it }
-
-        return runCatching {
-            val obj = JSONObject(candidate)
-            val itemId = obj.optString("itemId").trim()
-            val description = obj.optString("itemDescription")
-                .ifBlank { obj.optString("description") }
-                .trim()
-            val quantity = parseQuantity(obj.opt("currentStock"))
-                ?: parseQuantity(obj.opt("quantity"))
-
-            if (itemId.isBlank() || description.isBlank() || quantity == null) {
-                null
-            } else {
-                ScannedQrData(
-                    itemId = itemId,
-                    description = description,
-                    quantity = quantity
+        viewModelScope.launch {
+            runCatching {
+                repository.upsertSavedLocation(
+                    SavedLocation(
+                        ownerUid = ownerUid,
+                        locationNormalized = normalized,
+                        location = trimmedLocation,
+                        sid = _currentSid.value
+                    )
                 )
+            }.onSuccess {
+                onComplete(true)
+            }.onFailure { error ->
+                Log.e("Scanner", "Error saving location", error)
+                onComplete(false)
             }
-        }.getOrNull()
-    }
-
-    private fun parseQuantity(value: Any?): Int? {
-        return when (value) {
-            is Int -> value
-            is Long -> value.toInt()
-            is Double -> value.toInt()
-            is Float -> value.toInt()
-            is String -> value.trim().toIntOrNull()
-            else -> null
         }
     }
 
-    private fun decodeQuotedJson(value: String): String? {
-        if (!(value.startsWith("\"") && value.endsWith("\""))) return null
-        return runCatching { Json.decodeFromString<String>(value).trim() }.getOrNull()
+    private fun normalizeLocation(rawLocation: String): String {
+        return rawLocation.trim().lowercase(Locale.ROOT)
     }
 
-    private fun extractJsonObject(value: String): String? {
-        val start = value.indexOf('{')
-        val end = value.lastIndexOf('}')
-        if (start == -1 || end == -1 || end <= start) return null
-        return value.substring(start, end + 1).trim()
+    private fun resetActiveScanSession() {
+        _scannedItems.value = emptyList()
+        _currentSid.value = generateSid()
+        lastAcceptedRawScan = ""
+        lastAcceptedAtMs = 0L
+        seenScanFingerprints.clear()
     }
 
-    private fun unwrapSurroundingParentheses(value: String): String {
-        var result = value.trim()
-        while (result.length > 2 && result.startsWith("(") && result.endsWith(")")) {
-            result = result.substring(1, result.length - 1).trim()
+    private fun rebuildScanFingerprints(items: List<StockItem>) {
+        seenScanFingerprints.clear()
+        items.forEach { item ->
+            val parsed = QrDataParser.parseQrData(item.variableData)
+            val fingerprint = buildScanFingerprint(
+                fields = parsed?.fields.orEmpty(),
+                fallbackPayload = item.variableData
+            )
+            if (fingerprint.isNotBlank()) {
+                seenScanFingerprints.add(fingerprint)
+            }
         }
-        return result
+    }
+
+    private fun buildScanFingerprint(
+        fields: Map<String, String>,
+        fallbackPayload: String
+    ): String {
+        if (fields.isEmpty()) {
+            return normalizeFingerprintValue(fallbackPayload)
+        }
+
+        val dedupeKeys = resolveDedupeKeys(fields)
+
+        return dedupeKeys
+            .map { rawKey ->
+                val key = normalizeFingerprintKey(rawKey)
+                val value = normalizeFingerprintValue(QrDataParser.getFieldValue(fields, rawKey))
+                key to value
+            }
+            .sortedWith(compareBy<Pair<String, String>> { it.first }.thenBy { it.second })
+            .joinToString(separator = "|") { (key, value) -> "$key=$value" }
+    }
+
+    private fun resolveDedupeKeys(fields: Map<String, String>): List<String> {
+        val preferred = QrDataParser.selectMajorIdentifierKeys(
+            fields = fields,
+            requiredCount = 4
+        )
+        if (preferred.isNotEmpty()) return preferred
+
+        return fields.keys
+            .filter { it.isNotBlank() }
+            .take(4)
+    }
+
+    private fun normalizeFingerprintKey(raw: String): String {
+        return raw.trim()
+            .lowercase(Locale.ROOT)
+            .replace(WHITESPACE_REGEX, " ")
+            .replace(KEY_SYMBOL_REGEX, "")
+    }
+
+    private fun normalizeFingerprintValue(raw: String): String {
+        return raw.trim()
+            .lowercase(Locale.ROOT)
+            .replace(WHITESPACE_REGEX, " ")
+    }
+
+    private fun generateSid(length: Int = 6): String {
+        return buildString(length) {
+            repeat(length) {
+                append(SID_ALPHABET[sidRandom.nextInt(SID_ALPHABET.length)])
+            }
+        }
+    }
+
+    private companion object {
+        const val SID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        val WHITESPACE_REGEX = Regex("\\s+")
+        val KEY_SYMBOL_REGEX = Regex("[^a-z0-9]")
+        val sidRandom = SecureRandom()
     }
 }

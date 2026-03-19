@@ -2,30 +2,31 @@ package com.example.stockapp.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.util.UUID
 
 /**
- * Represents a single stock item in the database.
+ * Represents a single stock item in the database with hybrid JSON storage.
  *
- * @property id The unique identifier for the stock item.
- * @property description The description of the stock item.
- * @property quantity The current quantity of the stock item.
- * @property location The location of the stock item in the warehouse.
- * @property stockCode The stock code of the item.
- * @property stockTakeId The unique identifier for the stock take.
+ * @property id Unique record identifier.
+ * @property sid Schema/session identifier (SID) used to group one stock-take table.
+ * @property identifierKey Internal schema signature for the QR payload structure.
+ * @property orderNo Legacy optional field kept for backward compatibility.
+ * @property location Storage/location label used for grouping.
+ * @property dateScanned Timestamp when the QR record was scanned.
+ * @property variableData JSON payload that stores the scanned QR values.
  * @property ownerUid The account that owns this stock record.
  */
 @Serializable
 @Entity(tableName = "stock_table")
 data class StockItem(
-    @PrimaryKey(autoGenerate = true)
-    val id: Int = 0,
-    @SerialName("itemId") val itemId: String,
-    @SerialName("itemName") val description: String,
-    @SerialName("currentStock") val quantity: Int,
-    val location: String,
-    val stockCode: String,
-    val stockTakeId: String,
+    @PrimaryKey
+    val id: String = UUID.randomUUID().toString(),
+    val sid: String = "",
+    val identifierKey: String = "",
+    val orderNo: String? = null,
+    val location: String = "",
+    val dateScanned: Long = System.currentTimeMillis(),
+    val variableData: String = "{}",
     val ownerUid: String = ""
 )

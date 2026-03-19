@@ -10,7 +10,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 /**
  * The Room database for this app.
  */
-@Database(entities = [StockItem::class, User::class], version = 9, exportSchema = false)
+@Database(
+    entities = [StockItem::class, User::class, SavedLocation::class],
+    version = 12,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
 
     /**
@@ -22,6 +26,11 @@ abstract class AppDatabase : RoomDatabase() {
      * @return The DAO for the user_table.
      */
     abstract fun userDao(): UserDao
+
+    /**
+     * @return The DAO for the saved_location_table.
+     */
+    abstract fun savedLocationDao(): SavedLocationDao
 
     companion object {
         /**
@@ -42,7 +51,15 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stock_database"
                 )
-                .addMigrations(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                .addMigrations(
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                    MIGRATION_7_8,
+                    MIGRATION_8_9,
+                    MIGRATION_9_10,
+                    MIGRATION_10_11,
+                    MIGRATION_11_12
+                )
                 .build()
                 INSTANCE = instance
                 instance
@@ -88,6 +105,85 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN ownerUid TEXT NOT NULL DEFAULT ''")
                 db.execSQL("UPDATE stock_table SET ownerUid = stockTakeId WHERE ownerUid = ''")
+            }
+        }
+
+        /**
+         * Migration from version 9 to 10.
+         */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS saved_location_table (" +
+                        "ownerUid TEXT NOT NULL, " +
+                        "locationNormalized TEXT NOT NULL, " +
+                        "location TEXT NOT NULL, " +
+                        "sid TEXT NOT NULL, " +
+                        "PRIMARY KEY(ownerUid, locationNormalized))"
+                )
+
+                db.execSQL(
+                    "INSERT OR IGNORE INTO saved_location_table " +
+                        "(ownerUid, locationNormalized, location, sid) " +
+                        "SELECT ownerUid, " +
+                        "lower(trim(location)) AS locationNormalized, " +
+                        "trim(location) AS location, " +
+                        "CASE WHEN trim(MIN(stockCode)) = '' " +
+                        "THEN substr(upper(hex(randomblob(4))), 1, 6) " +
+                        "ELSE trim(MIN(stockCode)) END AS sid " +
+                        "FROM stock_table " +
+                        "WHERE trim(location) <> '' AND trim(ownerUid) <> '' " +
+                        "GROUP BY ownerUid, lower(trim(location))"
+                )
+            }
+        }
+
+        /**
+         * Migration from version 10 to 11: Convert to hybrid JSON schema.
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Create new table with hybrid schema
+                db.execSQL(
+                    "CREATE TABLE new_stock_table (" +
+                        "id TEXT PRIMARY KEY NOT NULL, " +
+                        "orderNo TEXT, " +
+                        "location TEXT NOT NULL, " +
+                        "dateScanned INTEGER NOT NULL, " +
+                        "variableData TEXT NOT NULL, " +
+                        "ownerUid TEXT NOT NULL)"
+                )
+
+                // Migrate data: convert old fields to JSON
+                db.execSQL(
+                    "INSERT INTO new_stock_table (id, orderNo, location, dateScanned, variableData, ownerUid) " +
+                        "SELECT " +
+                        "lower(hex(randomblob(16))), " +
+                        "stockTakeId, " +
+                        "location, " +
+                        "strftime('%s', 'now') * 1000, " +
+                        "json_object('itemId', itemId, 'description', description, 'quantity', quantity, 'stockCode', stockCode), " +
+                        "ownerUid " +
+                        "FROM stock_table"
+                )
+
+                // Drop old table and rename
+                db.execSQL("DROP TABLE stock_table")
+                db.execSQL("ALTER TABLE new_stock_table RENAME TO stock_table")
+            }
+        }
+
+        /**
+         * Migration from version 11 to 12: add SID and primary identifier key columns.
+         */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE stock_table ADD COLUMN sid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE stock_table ADD COLUMN identifierKey TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "UPDATE stock_table SET identifierKey = 'identifier' " +
+                        "WHERE trim(identifierKey) = ''"
+                )
             }
         }
     }

@@ -9,7 +9,7 @@
 
     <application
         android:name=".StockApplication"
-        android:label="StockPro"
+        android:label="StockTake"
         android:icon="@mipmap/ic_launcher_playstore"
         android:roundIcon="@mipmap/ic_launcher_playstore"
         android:usesCleartextTraffic="true"

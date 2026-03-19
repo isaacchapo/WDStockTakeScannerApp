@@ -1,6 +1,9 @@
 package com.example.stockapp.data
 
 import com.example.stockapp.data.local.InventoryGroup
+import com.example.stockapp.data.local.SavedLocation
+import com.example.stockapp.data.local.SavedLocationDao
+import com.example.stockapp.data.local.SchemaGroup
 import com.example.stockapp.data.local.StockItem
 import com.example.stockapp.data.local.StockItemDao
 import com.example.stockapp.data.local.User
@@ -10,11 +13,16 @@ import com.example.stockapp.data.remote.StockUploadItemDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import java.security.MessageDigest
+import java.util.Locale
 
 /**
  * A repository that handles data operations.
  */
-class StockRepository(private val stockItemDao: StockItemDao, private val userDao: UserDao) {
+class StockRepository(
+    private val stockItemDao: StockItemDao,
+    private val userDao: UserDao,
+    private val savedLocationDao: SavedLocationDao
+) {
     private val stockUploadClient = StockUploadClient()
 
     /**
@@ -23,9 +31,28 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
     fun getAllStockItems(ownerUid: String): Flow<List<StockItem>> = stockItemDao.getAllStockItems(ownerUid)
 
     /**
-     * A flow of inventory groups (Location + UID + SID).
+     * A flow of table groups (UID + location + SID).
      */
     fun getInventoryGroups(ownerUid: String): Flow<List<InventoryGroup>> = stockItemDao.getInventoryGroups(ownerUid)
+
+    /**
+     * A flow of saved locations for a specific user.
+     */
+    fun getSavedLocations(ownerUid: String): Flow<List<SavedLocation>> =
+        savedLocationDao.getSavedLocations(ownerUid)
+
+    /**
+     * Gets a specific saved location.
+     */
+    suspend fun getSavedLocation(ownerUid: String, locationNormalized: String): SavedLocation? =
+        savedLocationDao.getSavedLocation(ownerUid, locationNormalized)
+
+    /**
+     * Creates or updates a saved location.
+     */
+    suspend fun upsertSavedLocation(savedLocation: SavedLocation) {
+        savedLocationDao.upsert(savedLocation)
+    }
 
     /**
      * Inserts a stock item into the database.
@@ -44,44 +71,87 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
     }
 
     /**
-     * @return a flow of stock items for a specific inventory group.
+     * @return a flow of all records for a selected table group (SID + UID + location).
      */
-    fun getItemsForGroup(
+    fun getItemsForTable(
         ownerUid: String,
         location: String,
-        stockTakeId: String,
-        stockCode: String
+        sid: String
     ): Flow<List<StockItem>> {
-        return stockItemDao.getItemsForGroup(ownerUid, location, stockTakeId, stockCode)
+        return stockItemDao.getItemsForTable(ownerUid, location, sid)
     }
 
-    suspend fun updateGroup(
+    /**
+     * @return schema groups found inside a selected table.
+     */
+    fun getSchemaGroups(
+        ownerUid: String,
+        location: String,
+        sid: String
+    ): Flow<List<SchemaGroup>> {
+        return stockItemDao.getSchemaGroups(ownerUid, location, sid)
+    }
+
+    /**
+     * @return a flow of items that belong to a specific schema in a table.
+     */
+    fun getItemsForSchema(
+        ownerUid: String,
+        location: String,
+        sid: String,
+        schemaId: String
+    ): Flow<List<StockItem>> {
+        return stockItemDao.getItemsForSchema(ownerUid, location, sid, schemaId)
+    }
+
+    suspend fun updateTableLocation(
         ownerUid: String,
         oldLocation: String,
-        oldStockTakeId: String,
-        oldStockCode: String,
-        newLocation: String,
-        newStockTakeId: String,
-        newStockCode: String
+        oldSid: String,
+        newLocation: String
     ) {
-        stockItemDao.updateGroup(
+        val normalizedOldLocation = normalizeLocation(oldLocation)
+        val normalizedNewLocation = normalizeLocation(newLocation)
+        val trimmedNewLocation = newLocation.trim()
+
+        val existingSavedLocation = if (normalizedNewLocation.isBlank()) {
+            null
+        } else {
+            savedLocationDao.getSavedLocation(ownerUid, normalizedNewLocation)
+        }
+
+        val locationLabel = existingSavedLocation?.location ?: trimmedNewLocation
+
+        stockItemDao.updateTableLocation(
             ownerUid,
             oldLocation,
-            oldStockTakeId,
-            oldStockCode,
-            newLocation,
-            newStockTakeId,
-            newStockCode
+            oldSid,
+            locationLabel
         )
+
+        if (normalizedNewLocation.isNotBlank()) {
+            savedLocationDao.upsert(
+                SavedLocation(
+                    ownerUid = ownerUid,
+                    locationNormalized = normalizedNewLocation,
+                    location = locationLabel,
+                    sid = oldSid
+                )
+            )
+        }
+
+        if (normalizedOldLocation != normalizedNewLocation) {
+            deleteSavedLocationIfUnused(ownerUid, normalizedOldLocation)
+        }
     }
 
-    suspend fun deleteGroup(
+    suspend fun deleteTableGroup(
         ownerUid: String,
         location: String,
-        stockTakeId: String,
-        stockCode: String
+        sid: String
     ) {
-        stockItemDao.deleteGroup(ownerUid, location, stockTakeId, stockCode)
+        stockItemDao.deleteTableGroup(ownerUid, location, sid)
+        deleteSavedLocationIfUnused(ownerUid, normalizeLocation(location))
     }
 
     suspend fun updateStockItem(
@@ -91,18 +161,17 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
         stockItemDao.updateStockItem(
             ownerUid = ownerUid,
             id = stockItem.id,
-            itemId = stockItem.itemId,
-            description = stockItem.description,
-            quantity = stockItem.quantity,
+            sid = stockItem.sid,
+            identifierKey = stockItem.identifierKey,
+            orderNo = stockItem.orderNo,
             location = stockItem.location,
-            stockCode = stockItem.stockCode,
-            stockTakeId = stockItem.stockTakeId
+            variableData = stockItem.variableData
         )
     }
 
     suspend fun deleteStockItem(
         ownerUid: String,
-        stockItemId: Int
+        stockItemId: String
     ) {
         stockItemDao.deleteStockItem(ownerUid, stockItemId)
     }
@@ -110,19 +179,29 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
     suspend fun uploadInventory(
         baseUrl: String,
         endpointPath: String,
+        apiKey: String,
         ownerUid: String,
-        stockItems: List<StockItem>
+        stockItems: List<StockItem>,
+        onProgress: suspend (current: Int, total: Int) -> Unit = { _, _ -> }
     ): Result<String> {
         val scopedItems = stockItems.filter { it.ownerUid.isBlank() || it.ownerUid == ownerUid }
         if (scopedItems.isEmpty()) {
             return Result.failure(IllegalArgumentException("No stock items found to upload."))
+        }
+        if (apiKey.isBlank()) {
+            return Result.failure(IllegalArgumentException("API key is required for upload."))
         }
 
         val urlResult = stockUploadClient.buildUploadUrl(baseUrl, endpointPath)
         val uploadUrl = urlResult.getOrElse { return Result.failure(it) }
 
         val itemPayload = scopedItems.map { item -> item.toUploadDto(ownerUid) }
-        return stockUploadClient.uploadInventory(uploadUrl, itemPayload)
+        return stockUploadClient.uploadInventory(
+            uploadUrl = uploadUrl,
+            items = itemPayload,
+            apiKey = apiKey.trim(),
+            onProgress = onProgress
+        )
     }
 
     /**
@@ -162,16 +241,30 @@ class StockRepository(private val stockItemDao: StockItemDao, private val userDa
         val digest = md.digest(bytes)
         return digest.fold("") { str, it -> str + "%02x".format(it) }
     }
+
+    private suspend fun deleteSavedLocationIfUnused(ownerUid: String, normalizedLocation: String) {
+        if (normalizedLocation.isBlank()) return
+        val count = stockItemDao.countItemsByNormalizedLocation(ownerUid, normalizedLocation)
+        if (count == 0) {
+            savedLocationDao.deleteSavedLocation(ownerUid, normalizedLocation)
+        }
+    }
+
+    private fun normalizeLocation(rawLocation: String): String {
+        return rawLocation.trim().lowercase(Locale.ROOT)
+    }
+
 }
 
 private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
     return StockUploadItemDto(
-        itemId = itemId,
-        description = description,
-        qty = quantity,
+        id = id,
+        sid = sid,
+        identifierKey = identifierKey,
+        orderNo = orderNo,
         location = location,
-        stockCode = stockCode,
-        stockTakeId = stockTakeId,
+        dateScanned = dateScanned,
+        variableData = variableData,
         ownerUid = ownerUid
     )
 }
