@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -77,10 +76,11 @@ fun ViewStockCardScreen(
     shareMode: Boolean = false
 ) {
     val inventoryGroups by stockViewModel.inventoryGroups.collectAsState()
-    var selectedGroupKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedGroupKeys by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var openedGroupKey by rememberSaveable { mutableStateOf<String?>(null) }
 
-    val selectedGroup = inventoryGroups.firstOrNull { it.toKey() == selectedGroupKey }
+    val selectedGroups = inventoryGroups.filter { group -> selectedGroupKeys.contains(group.toKey()) }
+    val selectedGroup = selectedGroups.singleOrNull()
     val openedGroup = inventoryGroups.firstOrNull { it.toKey() == openedGroupKey }
     val actionGroup = openedGroup ?: selectedGroup
 
@@ -98,30 +98,24 @@ fun ViewStockCardScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val savedUploadConfig = remember(context) { ApiUploadPreferences.load(context) }
-    
-    var groupMenuExpanded by remember { mutableStateOf(false) }
-    var tableMenuExpanded by remember { mutableStateOf(false) }
-    
+
     var showUpdateGroupDialog by remember { mutableStateOf(false) }
-    var showDeleteGroupDialog by remember { mutableStateOf(false) }
     var updateLocation by remember { mutableStateOf("") }
-    
-    var selectedTableItemId by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedTableItem = stockItems.firstOrNull { it.id == selectedTableItemId }
-    
-    var showUpdateItemDialog by remember { mutableStateOf(false) }
-    var showDeleteItemDialog by remember { mutableStateOf(false) }
-    var updateItemSid by remember { mutableStateOf("") }
-    var updateItemSchemaId by remember { mutableStateOf("") }
-    var updateItemOrderNo by remember { mutableStateOf("") }
-    var updateItemLocation by remember { mutableStateOf("") }
-    
+
     var showUploadDialog by remember { mutableStateOf(false) }
     var uploadBaseUrl by rememberSaveable { mutableStateOf(savedUploadConfig.baseUrl) }
     var uploadEndpointPath by rememberSaveable { mutableStateOf(savedUploadConfig.endpointPath) }
     var uploadApiKey by rememberSaveable { mutableStateOf(savedUploadConfig.apiKey) }
     var pendingUploadItems by remember { mutableStateOf<List<StockItem>>(emptyList()) }
     var isUploading by remember { mutableStateOf(false) }
+
+    fun toggleGroupSelection(groupKey: String) {
+        selectedGroupKeys = if (selectedGroupKeys.contains(groupKey)) {
+            selectedGroupKeys - groupKey
+        } else {
+            selectedGroupKeys + groupKey
+        }
+    }
 
     fun shareItemsAsPdf(items: List<StockItem>, preferredSchemaId: String? = null, sidHint: String? = null) {
         if (items.isEmpty()) {
@@ -147,23 +141,22 @@ fun ViewStockCardScreen(
         }
     }
 
-    BackHandler(enabled = openedGroup != null) {
-        if (openedGroup != null) {
-            openedGroupKey = null
+    suspend fun collectItemsForGroups(groups: List<InventoryGroup>): List<StockItem> {
+        return groups.flatMap { group ->
+            stockViewModel.getItemsForTableSnapshot(group.location, group.sid)
+        }
+    }
+
+    BackHandler(enabled = openedGroup != null || selectedGroupKeys.isNotEmpty()) {
+        when {
+            openedGroup != null -> openedGroupKey = null
+            selectedGroupKeys.isNotEmpty() -> selectedGroupKeys = emptySet()
         }
     }
 
     LaunchedEffect(actionGroup) {
         if (actionGroup != null) {
             updateLocation = actionGroup.location
-        }
-    }
-
-    LaunchedEffect(openedGroupKey) {
-        groupMenuExpanded = false
-        tableMenuExpanded = false
-        if (openedGroupKey == null) {
-            selectedTableItemId = null
         }
     }
 
@@ -240,18 +233,22 @@ fun ViewStockCardScreen(
                         ) {
                             itemsIndexed(inventoryGroups) { index, group ->
                                 val groupKey = group.toKey()
-                                val isSelected = selectedGroupKey == groupKey
+                                val isSelected = selectedGroupKeys.contains(groupKey)
 
                                 InventoryGroupRowCard(
                                     index = index,
                                     group = group,
                                     isSelected = isSelected,
                                     onTap = {
-                                        openedGroupKey = groupKey
-                                        selectedGroupKey = null
+                                        if (selectedGroupKeys.isNotEmpty()) {
+                                            toggleGroupSelection(groupKey)
+                                        } else {
+                                            openedGroupKey = groupKey
+                                            selectedGroupKeys = emptySet()
+                                        }
                                     },
                                     onLongPress = {
-                                        selectedGroupKey = groupKey
+                                        toggleGroupSelection(groupKey)
                                     }
                                 )
                             }
@@ -273,8 +270,7 @@ fun ViewStockCardScreen(
 
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
                             itemsIndexed(stockItems) { index, item ->
-                                val isSelected = selectedTableItemId == item.id
-                                val rowColor = if (isSelected) Color(0xFFE3F2FD) else if (index % 2 == 0) Color.White else Color(0xFFF8FAFD)
+                                val rowColor = if (index % 2 == 0) Color.White else Color(0xFFF8FAFD)
                                 val itemFields = remember(item.variableData) {
                                     JsonFieldExtractor.extractAllFields(item.variableData)
                                 }
@@ -284,9 +280,6 @@ fun ViewStockCardScreen(
                                         .fillMaxWidth()
                                         .height(IntrinsicSize.Min)
                                         .background(rowColor)
-                                        .clickable {
-                                            selectedTableItemId = if (isSelected) null else item.id
-                                        }
                                 ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -311,126 +304,56 @@ fun ViewStockCardScreen(
                     }
                 }
             }
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        contentAlignment = Alignment.BottomEnd
-    ) {
-        Column(horizontalAlignment = Alignment.End) {
-            val menuExpanded = if (openedGroup == null) groupMenuExpanded else tableMenuExpanded
-            if (menuExpanded) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    horizontalAlignment = Alignment.End,
-                    modifier = Modifier.padding(bottom = 12.dp)
+            if (openedGroup == null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .height(1.dp)
+                        .background(Color(0xFFD8E5F7))
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    if (openedGroup == null) {
-                        ActionMenuButton(
-                            if (shareMode) "Share PDF" else "Upload",
-                            Color(0xFF1E88E5)
-                        ) {
-                            groupMenuExpanded = false
-                            val group = actionGroup
-                            if (group == null) {
-                                Toast.makeText(context, "Select or open a table first", Toast.LENGTH_SHORT).show()
-                            } else {
-                                coroutineScope.launch {
-                                    val items = stockViewModel.getItemsForTableSnapshot(group.location, group.sid)
-                                    if (items.isEmpty()) {
-                                        Toast.makeText(context, "No stock items", Toast.LENGTH_SHORT).show()
-                                    } else if (shareMode) {
-                                        shareItemsAsPdf(items, sidHint = group.sid)
-                                    } else {
-                                        pendingUploadItems = items
-                                        showUploadDialog = true
-                                    }
-                                }
-                            }
-                        }
-                        if (!shareMode) {
-                            ActionMenuButton("Update", Color(0xFF43A047)) {
-                                groupMenuExpanded = false
-                                if (actionGroup == null) {
-                                    Toast.makeText(context, "Select or open a table first", Toast.LENGTH_SHORT).show()
+                    if (shareMode) {
+                        BottomActionButton("Share", Color(0xFF1E88E5), enabled = selectedGroups.isNotEmpty()) {
+                            val groups = selectedGroups
+                            if (groups.isEmpty()) return@BottomActionButton
+                            coroutineScope.launch {
+                                val items = collectItemsForGroups(groups)
+                                if (items.isEmpty()) {
+                                    Toast.makeText(context, "No stock items", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    updateLocation = actionGroup.location
-                                    showUpdateGroupDialog = true
-                                }
-                            }
-                            ActionMenuButton("Delete", Color(0xFFE53935)) {
-                                groupMenuExpanded = false
-                                if (actionGroup == null) {
-                                    Toast.makeText(context, "Select or open a table first", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    showDeleteGroupDialog = true
+                                    val sidValues = groups.map { it.sid }.distinct()
+                                    val sidHint = if (sidValues.size == 1) sidValues.first() else "MULTI"
+                                    shareItemsAsPdf(items = items, sidHint = sidHint)
                                 }
                             }
                         }
                     } else {
-                        ActionMenuButton(if (shareMode) "Share PDF" else "Upload", Color(0xFF1E88E5)) {
-                            tableMenuExpanded = false
-                            if (stockItems.isEmpty()) {
-                                Toast.makeText(context, "No items", Toast.LENGTH_SHORT).show()
-                            } else if (shareMode) {
-                                shareItemsAsPdf(
-                                    items = stockItems,
-                                    preferredSchemaId = selectedTableItem?.identifierKey,
-                                    sidHint = openedGroup.sid
-                                )
-                            } else {
-                                pendingUploadItems = stockItems
-                                showUploadDialog = true
+                        BottomActionButton("Upload", Color(0xFF1E88E5), enabled = selectedGroups.isNotEmpty()) {
+                            val groups = selectedGroups
+                            if (groups.isEmpty()) return@BottomActionButton
+                            coroutineScope.launch {
+                                val items = collectItemsForGroups(groups)
+                                if (items.isEmpty()) {
+                                    Toast.makeText(context, "No stock items", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    pendingUploadItems = items
+                                    showUploadDialog = true
+                                }
                             }
                         }
-                        if (!shareMode) {
-                            ActionMenuButton("Update", Color(0xFF43A047)) {
-                                tableMenuExpanded = false
-                                val item = selectedTableItem
-                                if (item == null) {
-                                    Toast.makeText(context, "Tap a row to select first", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    updateItemSid = item.sid
-                                    updateItemSchemaId = item.identifierKey
-                                    updateItemOrderNo = item.orderNo.orEmpty()
-                                    updateItemLocation = item.location
-                                    showUpdateItemDialog = true
-                                }
-                            }
-                            ActionMenuButton("Delete", Color(0xFFE53935)) {
-                                tableMenuExpanded = false
-                                if (selectedTableItem == null) {
-                                    Toast.makeText(context, "Tap a row to select first", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    showDeleteItemDialog = true
-                                }
-                            }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        BottomActionButton("Update", Color(0xFF43A047), enabled = selectedGroups.size == 1) {
+                            val group = selectedGroup ?: return@BottomActionButton
+                            updateLocation = group.location
+                            showUpdateGroupDialog = true
                         }
                     }
-                }
-            }
-
-            Card(
-                modifier = Modifier.size(42.dp),
-                shape = RoundedCornerShape(21.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FBFF)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD8E5F7)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                IconButton(
-                    onClick = {
-                        if (openedGroup == null) {
-                            groupMenuExpanded = !groupMenuExpanded
-                        } else {
-                            tableMenuExpanded = !tableMenuExpanded
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Icon(imageVector = Icons.Filled.MoreVert, contentDescription = "Actions", tint = Color(0xFF0A4A99))
                 }
             }
         }
@@ -490,28 +413,29 @@ fun ViewStockCardScreen(
         )
     }
 
-    if (showUpdateGroupDialog && actionGroup != null) {
+    if (showUpdateGroupDialog && selectedGroup != null) {
         AlertDialog(
             onDismissRequest = { showUpdateGroupDialog = false },
             title = { Text("Update Group Info") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = updateLocation, onValueChange = { updateLocation = it }, label = { Text("Location") })
-                    OutlinedTextField(value = actionGroup.sid, onValueChange = {}, label = { Text("SID") }, enabled = false)
+                    OutlinedTextField(value = selectedGroup.sid, onValueChange = {}, label = { Text("SID") }, enabled = false)
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        val oldKey = actionGroup.toKey()
+                        val oldKey = selectedGroup.toKey()
                         stockViewModel.updateTableLocation(
-                            oldLocation = actionGroup.location,
-                            oldSid = actionGroup.sid,
+                            oldLocation = selectedGroup.location,
+                            oldSid = selectedGroup.sid,
                             newLocation = updateLocation.trim()
                         )
-                        val newKey = listOf(actionGroup.ownerUid, updateLocation.trim(), actionGroup.sid).joinToString("|")
+                        val newKey = listOf(selectedGroup.ownerUid, updateLocation.trim(), selectedGroup.sid).joinToString("|")
                         if (openedGroupKey == oldKey) openedGroupKey = newKey
-                        selectedGroupKey = null; showUpdateGroupDialog = false
+                        selectedGroupKeys = (selectedGroupKeys - oldKey) + newKey
+                        showUpdateGroupDialog = false
                     },
                     enabled = updateLocation.isNotBlank()
                 ) { Text("Save") }
@@ -519,86 +443,32 @@ fun ViewStockCardScreen(
             dismissButton = { TextButton(onClick = { showUpdateGroupDialog = false }) { Text("Cancel") } }
         )
     }
-
-    if (showDeleteGroupDialog && actionGroup != null) {
-        AlertDialog(
-            onDismissRequest = { showDeleteGroupDialog = false },
-            title = { Text("Delete Inventory Group") },
-            text = { Text("Delete all items in this group? This cannot be undone.") },
-            confirmButton = {
-                Button(onClick = {
-                    stockViewModel.deleteTableGroup(actionGroup.location, actionGroup.sid)
-                    selectedGroupKey = null; openedGroupKey = null; showDeleteGroupDialog = false
-                }) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { showDeleteGroupDialog = false }) { Text("Cancel") } }
-        )
-    }
-
-    if (showUpdateItemDialog && selectedTableItem != null) {
-        AlertDialog(
-            onDismissRequest = { showUpdateItemDialog = false },
-            title = { Text("Update Stock Row") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = updateItemSid, onValueChange = { updateItemSid = it }, label = { Text("SID") })
-                    OutlinedTextField(value = updateItemSchemaId, onValueChange = { updateItemSchemaId = it }, label = { Text("Schema ID") })
-                    OutlinedTextField(value = updateItemOrderNo, onValueChange = { updateItemOrderNo = it }, label = { Text("Order No (optional)") })
-                    OutlinedTextField(value = updateItemLocation, onValueChange = { updateItemLocation = it }, label = { Text("Location") })
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        stockViewModel.updateStockItem(
-                            selectedTableItem.copy(
-                                sid = updateItemSid.trim(),
-                                identifierKey = updateItemSchemaId.trim(),
-                                orderNo = updateItemOrderNo.trim().ifBlank { null },
-                                location = updateItemLocation.trim()
-                            )
-                        )
-                        showUpdateItemDialog = false
-                    },
-                    enabled = updateItemSid.isNotBlank() && updateItemSchemaId.isNotBlank() && updateItemLocation.isNotBlank()
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showUpdateItemDialog = false }) { Text("Cancel") } }
-        )
-    }
-
-    if (showDeleteItemDialog && selectedTableItem != null) {
-        AlertDialog(
-            onDismissRequest = { showDeleteItemDialog = false },
-            title = { Text("Delete Stock Row") },
-            text = { Text("Delete this item? This cannot be undone.") },
-            confirmButton = {
-                Button(onClick = {
-                    stockViewModel.deleteStockItem(selectedTableItem.id)
-                    selectedTableItemId = null; showDeleteItemDialog = false
-                }) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { showDeleteItemDialog = false }) { Text("Cancel") } }
-        )
-    }
 }
 
 @Composable
-private fun ActionMenuButton(text: String, color: Color, onClick: () -> Unit) {
+private fun BottomActionButton(
+    text: String,
+    color: Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
     OutlinedButton(
         onClick = onClick,
+        enabled = enabled,
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = Color(0xFFF8FBFF),
-            contentColor = color
+            contentColor = color,
+            disabledContainerColor = Color(0xFFF1F5FA),
+            disabledContentColor = Color(0xFF90A4AE)
         ),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         modifier = Modifier
-            .height(36.dp)
-            .width(122.dp)
+            .height(38.dp)
+            .width(138.dp)
     ) {
         Text(
             text = text,
-            color = color,
+            color = if (enabled) color else Color(0xFF90A4AE),
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold
         )
