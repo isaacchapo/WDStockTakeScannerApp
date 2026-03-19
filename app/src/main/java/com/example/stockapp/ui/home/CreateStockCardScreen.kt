@@ -38,9 +38,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
-import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -74,6 +76,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.dp
@@ -150,7 +153,6 @@ fun CreateStockCardScreen(
 
     var isScanning by remember { mutableStateOf(false) }
     var isPaused by remember { mutableStateOf(false) }
-    var scannerMessage by remember { mutableStateOf<String?>(null) }
     var isDeviceScannerBusy by remember { mutableStateOf(false) }
     var showSavedLocations by remember { mutableStateOf(false) }
     var showAddLocationForm by remember { mutableStateOf(false) }
@@ -204,7 +206,16 @@ fun CreateStockCardScreen(
 
     fun applyScanResult(rawValue: String) {
         val result = createStockViewModel.addScannedItem(rawValue)
-        scannerMessage = result.message
+        if (!result.accepted) {
+            val message = if (result.message?.contains("duplicate", ignoreCase = true) == true) {
+                "Duplicate not allowed"
+            } else {
+                result.message
+            }
+            if (!message.isNullOrBlank()) {
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     val startDeviceScanner: () -> Unit = {
@@ -215,7 +226,6 @@ fun CreateStockCardScreen(
             }
 
             isDeviceScannerBusy = true
-            scannerMessage = null
 
             // Trigger the hardware aiming laser/scanner via broadcast
             try {
@@ -226,10 +236,9 @@ fun CreateStockCardScreen(
                     putExtra("com.motorolasolutions.emdk.datawedge.api.EXTRA_PARAMETER_VALUE", EXTRA_PARAMETER_VALUE)
                 })
                 Log.d("Scanner", "Sent hardware scanner trigger broadcasts")
-                scannerMessage = "Scanner armed. Pull trigger to scan."
             } catch (e: Exception) {
                 Log.e("Scanner", "Failed to send hardware trigger", e)
-                scannerMessage = "Could not arm scanner trigger broadcast."
+                Toast.makeText(context, "Could not arm scanner trigger broadcast.", Toast.LENGTH_SHORT).show()
             } finally {
                 isDeviceScannerBusy = false
             }
@@ -369,13 +378,65 @@ fun CreateStockCardScreen(
                         Column(
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            Text(
-                                text = "Temporary Scanned Data",
-                                color = Color(0xFF0A4A99),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
+                            val startStopLabel = if (isScanning) "End Stock Take" else "Start Stock Take"
+                            val startStopIcon = if (isScanning) Icons.Filled.Stop else Icons.Filled.QrCodeScanner
+                            val startStopColor = if (isScanning) Color(0xFFC62828) else Color(0xFF1565C0)
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Scanned Data",
+                                    color = Color(0xFF0A4A99),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedButton(
+                                    onClick = {
+                                        isTopCardCollapsed = true
+                                        showSavedLocations = false
+                                        if (!isScanning) {
+                                            isScanning = true
+                                            isPaused = false
+                                            startDeviceScanner()
+                                        } else {
+                                            isScanning = false
+                                            isPaused = false
+                                            context.sendBroadcast(Intent("com.android.scanner.DISABLED"))
+                                        }
+                                    },
+                                    enabled = isScanning || !isDeviceScannerBusy,
+                                    modifier = Modifier
+                                        .padding(start = 8.dp)
+                                        .height(36.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = Color(0xFFF8FBFF),
+                                        disabledContainerColor = Color(0xFFF1F5FA),
+                                        contentColor = startStopColor,
+                                        disabledContentColor = Color(0xFF90A4AE)
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = startStopIcon,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = if (isScanning || !isDeviceScannerBusy) startStopColor else Color(0xFF90A4AE)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = startStopLabel,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isScanning || !isDeviceScannerBusy) startStopColor else Color(0xFF90A4AE)
+                                    )
+                                }
+                            }
 
                             Row(
                                 modifier = Modifier
@@ -480,7 +541,7 @@ fun CreateStockCardScreen(
                                     .padding(horizontal = 10.dp, vertical = 8.dp)
                             ) {
                                 Text(
-                                    text = "Total scanned: ${scannedItems.size} QR code(s)",
+                                    text = "Total:${scannedItems.size}",
                                     color = Color(0xFF0A4A99),
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 12.sp
@@ -529,58 +590,36 @@ fun CreateStockCardScreen(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val scanLabel = when {
-                        !isScanning -> "Start Scan"
-                        isPaused -> "Resume Scan"
-                        else -> "Pause Scan"
-                    }
+                    val pauseResumeLabel = if (isPaused) "Resume Stock Take" else "Pause Stock Take"
+                    val pauseResumeIcon = if (isPaused) Icons.Filled.PlayCircle else Icons.Filled.PauseCircle
 
                     TightActionButton(
-                        text = scanLabel,
-                        icon = Icons.Filled.QrCodeScanner,
+                        text = pauseResumeLabel,
+                        icon = pauseResumeIcon,
                         onClick = {
+                            if (!isScanning) return@TightActionButton
                             isTopCardCollapsed = true
                             showSavedLocations = false
-                            when {
-                                !isScanning -> {
-                                    isScanning = true
-                                    isPaused = false
-                                    scannerMessage = null
-                                    startDeviceScanner()
-                                }
-                                isPaused -> {
-                                    isPaused = false
-                                    startDeviceScanner()
-                                }
-                                else -> {
-                                    isPaused = true
-                                }
+                            if (isPaused) {
+                                isPaused = false
+                                startDeviceScanner()
+                            } else {
+                                isPaused = true
                             }
                         },
-                        enabled = !isDeviceScannerBusy,
-                        accentColor = Color(0xFF1565C0),
-                        modifier = Modifier.weight(1f)
+                        enabled = isScanning && (!isPaused || !isDeviceScannerBusy),
+                        accentColor = Color(0xFF455A64),
+                        modifier = Modifier.width(198.dp)
                     )
 
-                    TightActionButton(
-                        text = "Stop Scan",
-                        icon = Icons.Filled.Stop,
-                        onClick = {
-                            isScanning = false
-                            isPaused = false
-                            scannerMessage = null
-                            context.sendBroadcast(Intent("com.android.scanner.DISABLED"))
-                        },
-                        enabled = isScanning,
-                        accentColor = Color(0xFFC62828),
-                        modifier = Modifier.weight(1f)
-                    )
+                    Spacer(modifier = Modifier.width(10.dp))
 
                     TightActionButton(
-                        text = if (isSaving) "Saving..." else "Confirm & Save",
-                        icon = Icons.Filled.Done,
+                        text = if (isSaving) "Saving..." else "Confirm",
+                        icon = Icons.Filled.CheckCircle,
                         onClick = {
                             if (!canConfirm) return@TightActionButton
                             createStockViewModel.confirmScannedItems(location) { saved ->
@@ -593,19 +632,7 @@ fun CreateStockCardScreen(
                         },
                         enabled = canConfirm,
                         accentColor = Color(0xFF2E7D32),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                scannerMessage?.let { message ->
-                    Text(
-                        text = message,
-                        color = Color(0xFFD32F2F),
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp),
-                        textAlign = TextAlign.Start
+                        modifier = Modifier.width(126.dp)
                     )
                 }
             }
@@ -679,7 +706,7 @@ fun CreateStockCardScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Do you want to proceed? This will cancel the current stock take session",
+                        text = "Do you want to proceed with this action? It will cancel the current stock take session",
                         color = Color(0xFF102A43),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -692,7 +719,7 @@ fun CreateStockCardScreen(
                             onClick = { showExitSessionPrompt = false }
                         ) {
                             Text(
-                                text = "Cancel",
+                                text = "No",
                                 color = Color(0xFF546E7A),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -704,7 +731,6 @@ fun CreateStockCardScreen(
                                 showExitSessionPrompt = false
                                 isScanning = false
                                 isPaused = false
-                                scannerMessage = null
                                 selectedScannedItemId = null
                                 selectedRowTopPx = null
                                 selectedRowLeftPx = null
@@ -758,9 +784,11 @@ private fun TightActionButton(
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = text,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (enabled) accentColor else Color(0xFF90A4AE)
+            color = if (enabled) accentColor else Color(0xFF90A4AE),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
