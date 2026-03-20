@@ -24,6 +24,12 @@ class CreateStockViewModel(
         val message: String? = null
     )
 
+    data class ConfirmSaveResult(
+        val success: Boolean,
+        val savedCount: Int = 0,
+        val duplicateCount: Int = 0
+    )
+
     private val _scannedItems = MutableStateFlow<List<StockItem>>(emptyList())
     val scannedItems = _scannedItems.asStateFlow()
     private val _currentSid = MutableStateFlow(generateSid())
@@ -104,7 +110,7 @@ class CreateStockViewModel(
 
     fun confirmScannedItems(
         location: String,
-        onComplete: (Boolean) -> Unit = {}
+        onComplete: (ConfirmSaveResult) -> Unit = {}
     ) {
         val normalizedLocation = normalizeLocation(location)
         if (
@@ -112,7 +118,7 @@ class CreateStockViewModel(
             normalizedLocation.isBlank() ||
             _isSaving.value
         ) {
-            onComplete(false)
+            onComplete(ConfirmSaveResult(success = false))
             return
         }
         val tempItems = _scannedItems.value
@@ -121,25 +127,21 @@ class CreateStockViewModel(
             tempItems.isEmpty() ||
             activeSid.isBlank()
         ) {
-            onComplete(false)
+            onComplete(ConfirmSaveResult(success = false))
             return
         }
 
         viewModelScope.launch {
             _isSaving.value = true
             try {
+                val persistedFingerprints = repository.getAllStockItemsSnapshot(ownerUid)
+                    .mapNotNull { persistedItem ->
+                        buildFingerprintForItem(persistedItem).takeIf { it.isNotBlank() }
+                    }
+                    .toHashSet()
                 val locationDisplayName =
                     _savedLocations.value.firstOrNull { it.locationNormalized == normalizedLocation }?.location
                         ?: location.trim()
-
-                repository.upsertSavedLocation(
-                    SavedLocation(
-                        ownerUid = ownerUid,
-                        locationNormalized = normalizedLocation,
-                        location = locationDisplayName,
-                        sid = activeSid
-                    )
-                )
 
                 val itemsToSave = tempItems.map { item ->
                     item.copy(
@@ -148,13 +150,45 @@ class CreateStockViewModel(
                         ownerUid = ownerUid
                     )
                 }
+                val newItemsToSave = mutableListOf<StockItem>()
+                var duplicateCount = 0
 
-                repository.insertAll(itemsToSave)
+                itemsToSave.forEach { item ->
+                    val fingerprint = buildFingerprintForItem(item)
+                    val alreadyExists = fingerprint.isNotBlank() && persistedFingerprints.contains(fingerprint)
+                    if (alreadyExists) {
+                        duplicateCount += 1
+                    } else {
+                        newItemsToSave += item
+                        if (fingerprint.isNotBlank()) {
+                            persistedFingerprints.add(fingerprint)
+                        }
+                    }
+                }
+
+                if (newItemsToSave.isNotEmpty()) {
+                    repository.upsertSavedLocation(
+                        SavedLocation(
+                            ownerUid = ownerUid,
+                            locationNormalized = normalizedLocation,
+                            location = locationDisplayName,
+                            sid = activeSid
+                        )
+                    )
+
+                    repository.insertAll(newItemsToSave)
+                }
                 resetActiveScanSession()
-                onComplete(true)
+                onComplete(
+                    ConfirmSaveResult(
+                        success = true,
+                        savedCount = newItemsToSave.size,
+                        duplicateCount = duplicateCount
+                    )
+                )
             } catch (e: Exception) {
                 Log.e("Scanner", "Error saving scanned items", e)
-                onComplete(false)
+                onComplete(ConfirmSaveResult(success = false))
             } finally {
                 _isSaving.value = false
             }
@@ -232,15 +266,19 @@ class CreateStockViewModel(
     private fun rebuildScanFingerprints(items: List<StockItem>) {
         seenScanFingerprints.clear()
         items.forEach { item ->
-            val parsed = QrDataParser.parseQrData(item.variableData)
-            val fingerprint = buildScanFingerprint(
-                fields = parsed?.fields.orEmpty(),
-                fallbackPayload = item.variableData
-            )
+            val fingerprint = buildFingerprintForItem(item)
             if (fingerprint.isNotBlank()) {
                 seenScanFingerprints.add(fingerprint)
             }
         }
+    }
+
+    private fun buildFingerprintForItem(item: StockItem): String {
+        val parsed = QrDataParser.parseQrData(item.variableData)
+        return buildScanFingerprint(
+            fields = parsed?.fields.orEmpty(),
+            fallbackPayload = item.variableData
+        )
     }
 
     private fun buildScanFingerprint(

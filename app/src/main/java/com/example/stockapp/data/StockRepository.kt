@@ -30,6 +30,9 @@ class StockRepository(
      */
     fun getAllStockItems(ownerUid: String): Flow<List<StockItem>> = stockItemDao.getAllStockItems(ownerUid)
 
+    suspend fun getAllStockItemsSnapshot(ownerUid: String): List<StockItem> =
+        stockItemDao.getAllStockItemsSnapshot(ownerUid)
+
     /**
      * A flow of table groups (UID + location + SID).
      */

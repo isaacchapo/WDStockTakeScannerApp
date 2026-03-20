@@ -10,6 +10,9 @@ import com.example.stockapp.data.QrDataParser
 import com.example.stockapp.data.local.StockItem
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -33,7 +36,16 @@ private data class ParsedSchemaRecord(
     val location: String,
     val sid: String,
     val uid: String,
+    val dateScanned: Long,
     val fields: Map<String, String>
+)
+
+private data class PdfTableSection(
+    val location: String,
+    val sid: String,
+    val uid: String,
+    val columns: List<String>,
+    val rows: List<List<String>>
 )
 
 private fun generateSchemaPdf(
@@ -49,26 +61,12 @@ private fun generateSchemaPdf(
             location = item.location,
             sid = item.sid,
             uid = item.ownerUid,
+            dateScanned = item.dateScanned,
             fields = extractQrFields(item.variableData)
         )
     }
-
-    val qrColumns = linkedMapOf<String, String>()
-    parsedRecords.forEach { record ->
-        record.fields.keys.forEach { rawKey ->
-            val displayKey = rawKey.trim()
-            if (displayKey.isNotBlank()) {
-                val normalized = normalizeColumnKey(displayKey)
-                if (!qrColumns.containsKey(normalized)) {
-                    qrColumns[normalized] = displayKey
-                }
-            }
-        }
-    }
-
-    val orderedQrColumns = qrColumns.values.toList().ifEmpty { listOf("DATA") }
-    val locationValue = parsedRecords.firstOrNull { it.location.isNotBlank() }?.location.orEmpty()
-    val uidValue = parsedRecords.firstOrNull { it.uid.isNotBlank() }?.uid.orEmpty()
+    val exportedAt = System.currentTimeMillis()
+    val sections = buildPdfSections(parsedRecords)
 
     val pageWidth = 595
     val pageHeight = 842
@@ -78,11 +76,6 @@ private fun generateSchemaPdf(
     val bodyRowHeight = 22f
     val metadataRowHeight = 28f
     val tableWidth = pageWidth - (margin * 2f)
-    val columnCount = orderedQrColumns.size.coerceAtLeast(1)
-    val columnWidth = tableWidth / columnCount
-
-    val titleText = "ZAMEFA ${locationValue.ifBlank { "-" }}".uppercase()
-    val metadataText = buildMetadataText(locationValue, sid, uidValue)
 
     val titlePaint = Paint().apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -113,9 +106,9 @@ private fun generateSchemaPdf(
     }
 
     val document = PdfDocument()
-    var pageNumber = 1
-    var page = document.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create())
-    var canvas = page.canvas
+    var pageNumber = 0
+    lateinit var page: PdfDocument.Page
+    lateinit var canvas: android.graphics.Canvas
     var y = margin
 
     fun drawMergedRow(
@@ -124,7 +117,8 @@ private fun generateSchemaPdf(
         height: Float,
         textPaint: Paint,
         backgroundColor: Int,
-        textColor: Int
+        textColor: Int,
+        centered: Boolean = false
     ) {
         fillPaint.color = backgroundColor
         canvas.drawRect(margin, top, margin + tableWidth, top + height, fillPaint)
@@ -133,12 +127,18 @@ private fun generateSchemaPdf(
 
         textPaint.color = textColor
         val baseline = top + (height / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2f)
-        canvas.drawText(text, margin + 8f, baseline, textPaint)
+        val startX = if (centered) {
+            margin + ((tableWidth - textPaint.measureText(text)) / 2f).coerceAtLeast(8f)
+        } else {
+            margin + 8f
+        }
+        canvas.drawText(text, startX, baseline, textPaint)
     }
 
-    fun drawHeader(top: Float) {
+    fun drawHeader(columns: List<String>, top: Float) {
+        val columnWidth = tableWidth / columns.size.coerceAtLeast(1)
         var x = margin
-        orderedQrColumns.forEach { rawColumn ->
+        columns.forEach { rawColumn ->
             fillPaint.color = 0xFF0A4A99.toInt()
             canvas.drawRect(x, top, x + columnWidth, top + headerRowHeight, fillPaint)
             strokePaint.color = 0xFFFFFFFF.toInt()
@@ -155,6 +155,7 @@ private fun generateSchemaPdf(
     }
 
     fun drawBodyRow(values: List<String>, top: Float, rowIndex: Int) {
+        val columnWidth = tableWidth / values.size.coerceAtLeast(1)
         var x = margin
         values.forEach { rawValue ->
             fillPaint.color = if (rowIndex % 2 == 0) 0xFFF8FBFF.toInt() else 0xFFF2F7FF.toInt()
@@ -172,68 +173,58 @@ private fun generateSchemaPdf(
         }
     }
 
-    fun startNewPage() {
-        document.finishPage(page)
+    fun startNewPage(section: PdfTableSection) {
+        if (pageNumber > 0) {
+            document.finishPage(page)
+        }
         pageNumber += 1
         page = document.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create())
         canvas = page.canvas
         y = margin
         drawMergedRow(
-            text = titleText,
+            text = buildTitleText(section.location),
             top = y,
             height = titleRowHeight,
             textPaint = titlePaint,
             backgroundColor = 0xFFE8F1FF.toInt(),
-            textColor = 0xFF0A4A99.toInt()
+            textColor = 0xFF0A4A99.toInt(),
+            centered = true
         )
         y += titleRowHeight
-        drawHeader(y)
+        drawHeader(section.columns, y)
         y += headerRowHeight
     }
 
-    drawMergedRow(
-        text = titleText,
-        top = y,
-        height = titleRowHeight,
-        textPaint = titlePaint,
-        backgroundColor = 0xFFE8F1FF.toInt(),
-        textColor = 0xFF0A4A99.toInt()
-    )
-    y += titleRowHeight
-    drawHeader(y)
-    y += headerRowHeight
+    sections.forEach { section ->
+        startNewPage(section)
 
-    val dataRows = parsedRecords.map { record ->
-        orderedQrColumns.map { columnName ->
-            record.fields[columnName]
-                ?: record.fields.entries.firstOrNull {
-                    normalizeColumnKey(it.key) == normalizeColumnKey(columnName)
-                }?.value
-                .orEmpty()
+        section.rows.forEachIndexed { rowIndex, rowValues ->
+            val requiredBottomSpace = metadataRowHeight + 8f + margin
+            if (y + bodyRowHeight > pageHeight - requiredBottomSpace) {
+                startNewPage(section)
+            }
+            drawBodyRow(rowValues, y, rowIndex)
+            y += bodyRowHeight
         }
-    }
 
-    dataRows.forEachIndexed { rowIndex, rowValues ->
-        val requiredBottomSpace = metadataRowHeight + 8f + margin
-        if (y + bodyRowHeight > pageHeight - requiredBottomSpace) {
-            startNewPage()
+        if (y + metadataRowHeight > pageHeight - margin) {
+            startNewPage(section)
         }
-        drawBodyRow(rowValues, y, rowIndex)
-        y += bodyRowHeight
-    }
 
-    if (y + metadataRowHeight > pageHeight - margin) {
-        startNewPage()
+        drawMergedRow(
+            text = buildMetadataText(
+                location = section.location,
+                sid = section.sid,
+                uid = section.uid,
+                exportedAt = exportedAt
+            ),
+            top = y,
+            height = metadataRowHeight,
+            textPaint = metadataPaint,
+            backgroundColor = 0xFFE3F2FD.toInt(),
+            textColor = 0xFF0D47A1.toInt()
+        )
     }
-
-    drawMergedRow(
-        text = metadataText,
-        top = y,
-        height = metadataRowHeight,
-        textPaint = metadataPaint,
-        backgroundColor = 0xFFE3F2FD.toInt(),
-        textColor = 0xFF0D47A1.toInt()
-    )
 
     val fileName = buildFileName(sid, schemaId, "pdf")
 
@@ -269,9 +260,67 @@ private fun extractQrFields(variableData: String): Map<String, String> {
     }.getOrDefault(emptyMap())
 }
 
-private fun buildMetadataText(location: String, sid: String, uid: String): String {
-    return "LOCATION: ${location.ifBlank { "-" }} | SID: ${sid.ifBlank { "-" }} | UID: ${uid.ifBlank { "-" }}"
+private fun buildPdfSections(records: List<ParsedSchemaRecord>): List<PdfTableSection> {
+    val groupedRecords = linkedMapOf<String, MutableList<ParsedSchemaRecord>>()
+    records.forEach { record ->
+        val groupKey = listOf(record.location, record.sid, record.uid).joinToString("|")
+        groupedRecords.getOrPut(groupKey) { mutableListOf() }.add(record)
+    }
+
+    return groupedRecords.values.map { groupRecords ->
+        val qrColumns = linkedMapOf<String, String>()
+        groupRecords.forEach { record ->
+            record.fields.keys.forEach { rawKey ->
+                val displayKey = rawKey.trim()
+                if (displayKey.isNotBlank()) {
+                    val normalized = normalizeColumnKey(displayKey)
+                    if (!qrColumns.containsKey(normalized)) {
+                        qrColumns[normalized] = displayKey
+                    }
+                }
+            }
+        }
+
+        val orderedQrColumns = qrColumns.values.toMutableList()
+        if (orderedQrColumns.isEmpty()) {
+            orderedQrColumns += "DATA"
+        }
+
+        val columns = orderedQrColumns + "TIMESTAMP"
+        val rows = groupRecords.map { record ->
+            val baseValues = orderedQrColumns.map { columnName ->
+                record.fields[columnName]
+                    ?: record.fields.entries.firstOrNull {
+                        normalizeColumnKey(it.key) == normalizeColumnKey(columnName)
+                    }?.value
+                    .orEmpty()
+            }
+            baseValues + formatPdfTimestamp(record.dateScanned)
+        }
+
+        PdfTableSection(
+            location = groupRecords.firstOrNull()?.location.orEmpty(),
+            sid = groupRecords.firstOrNull()?.sid.orEmpty(),
+            uid = groupRecords.firstOrNull()?.uid.orEmpty(),
+            columns = columns,
+            rows = rows
+        )
+    }
+}
+
+private fun buildTitleText(location: String): String {
+    return "ZAMEFA ${location.ifBlank { "-" }}".uppercase()
+}
+
+private fun buildMetadataText(location: String, sid: String, uid: String, exportedAt: Long): String {
+    return "LOCATION: ${location.ifBlank { "-" }} | SID: ${sid.ifBlank { "-" }} | UID: ${uid.ifBlank { "-" }} | EXPORTED: ${formatPdfTimestamp(exportedAt)}"
         .uppercase()
+}
+
+private fun formatPdfTimestamp(epochMillis: Long): String {
+    return runCatching {
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(epochMillis))
+    }.getOrElse { "-" }
 }
 
 private fun buildFileName(sid: String, schemaId: String, extension: String): String {

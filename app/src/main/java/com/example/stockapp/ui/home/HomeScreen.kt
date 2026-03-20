@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -65,13 +66,13 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     HomeCard(
-                        text = "Create Stock",
+                        text = "Create Stock Take",
                         subtitle = null,
                         icon = Icons.Filled.QrCodeScanner,
                         onClick = onCreateStockCard
                     )
                     HomeCard(
-                        text = "View Stock",
+                        text = "View Stock Take",
                         subtitle = null,
                         icon = Icons.Filled.Visibility,
                         onClick = onViewStockCard
@@ -194,7 +195,7 @@ private fun TopBarTitle() {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "STOCK MANAGEMENT",
+            text = "STOCK TAKE APP",
             color = Color.White,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
@@ -253,17 +254,60 @@ private fun UserInfoCard(loggedInUser: String) {
 
 @Composable
 private fun FooterBranding() {
-    Text(
-        text = "@2026 WEBDEV TECHNOLOGIES",
+    val uriHandler = LocalUriHandler.current
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 14.dp),
-        color = Color(0xFF1565C0),
-        textAlign = TextAlign.Center,
-        fontSize = 15.sp,
-        fontWeight = FontWeight.Bold,
-        fontFamily = FontFamily.Serif,
-        fontStyle = FontStyle.Italic,
-        letterSpacing = 0.6.sp
-    )
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "www.webdevzm.tech",
+                modifier = Modifier.clickable {
+                    uriHandler.openUri("https://www.webdevzm.tech")
+                },
+                color = Color(0xFF2F6DA8),
+                textAlign = TextAlign.Center,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.SansSerif
+            )
+            Text(
+                text = " | Contact: ",
+                color = Color(0xFF5B6F82),
+                textAlign = TextAlign.Center,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.SansSerif
+            )
+            Text(
+                text = "0960911672",
+                modifier = Modifier.clickable {
+                    uriHandler.openUri("tel:0960911672")
+                },
+                color = Color(0xFF1E4E8C),
+                textAlign = TextAlign.Center,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.SansSerif
+            )
+        }
+        Text(
+            text = "Developed By Webdev Technologies",
+            color = Color(0xFF1E4E8C),
+            textAlign = TextAlign.Center,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Serif,
+            fontStyle = FontStyle.Italic,
+            letterSpacing = 0.2.sp
+        )
+    }
 }

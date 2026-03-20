@@ -32,6 +32,9 @@ interface StockItemDao {
     @Query("SELECT * FROM stock_table WHERE ownerUid = :ownerUid ORDER BY dateScanned DESC")
     fun getAllStockItems(ownerUid: String): Flow<List<StockItem>>
 
+    @Query("SELECT * FROM stock_table WHERE ownerUid = :ownerUid")
+    suspend fun getAllStockItemsSnapshot(ownerUid: String): List<StockItem>
+
     /**
      * @return a flow of table groups identified by SID + UID + location.
      */

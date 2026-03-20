@@ -159,6 +159,7 @@ fun CreateStockCardScreen(
     var addLocationDraft by remember { mutableStateOf("") }
     var isTopCardCollapsed by remember { mutableStateOf(false) }
     var selectedScannedItemId by remember { mutableStateOf<String?>(null) }
+    var showEndSessionPrompt by remember { mutableStateOf(false) }
     var showExitSessionPrompt by remember { mutableStateOf(false) }
     var tableTopInRoot by remember { mutableStateOf(0f) }
     var tableLeftInRoot by remember { mutableStateOf(0f) }
@@ -177,6 +178,7 @@ fun CreateStockCardScreen(
     val overlayVerticalShiftPx = with(density) { 4.dp.roundToPx() }
 
     var location by remember { mutableStateOf("") }
+    val actionButtonWidth = 126.dp
 
     val canConfirm = scannedItems.isNotEmpty() &&
         location.isNotBlank() &&
@@ -378,41 +380,36 @@ fun CreateStockCardScreen(
                         Column(
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            val startStopLabel = if (isScanning) "End Stock Take" else "Start Stock Take"
+                            val startStopLabel = if (isScanning) "End" else "Start"
                             val startStopIcon = if (isScanning) Icons.Filled.Stop else Icons.Filled.QrCodeScanner
                             val startStopColor = if (isScanning) Color(0xFFC62828) else Color(0xFF1565C0)
 
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Text(
-                                    text = "Scanned Data",
-                                    color = Color(0xFF0A4A99),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 15.sp,
-                                    modifier = Modifier.weight(1f)
-                                )
                                 OutlinedButton(
                                     onClick = {
-                                        isTopCardCollapsed = true
-                                        showSavedLocations = false
                                         if (!isScanning) {
+                                            if (location.isBlank()) {
+                                                isTopCardCollapsed = false
+                                                Toast.makeText(context, "Please enter Location", Toast.LENGTH_SHORT).show()
+                                                return@OutlinedButton
+                                            }
+                                            isTopCardCollapsed = true
+                                            showSavedLocations = false
                                             isScanning = true
                                             isPaused = false
                                             startDeviceScanner()
                                         } else {
-                                            isScanning = false
-                                            isPaused = false
-                                            context.sendBroadcast(Intent("com.android.scanner.DISABLED"))
+                                            showEndSessionPrompt = true
                                         }
                                     },
                                     enabled = isScanning || !isDeviceScannerBusy,
                                     modifier = Modifier
-                                        .padding(start = 8.dp)
                                         .height(36.dp),
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.outlinedButtonColors(
@@ -436,6 +433,13 @@ fun CreateStockCardScreen(
                                         color = if (isScanning || !isDeviceScannerBusy) startStopColor else Color(0xFF90A4AE)
                                     )
                                 }
+                                Text(
+                                    text = "Scanned Items",
+                                    color = Color(0xFF5F7390),
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 10.sp,
+                                    textAlign = TextAlign.Center
+                                )
                             }
 
                             Row(
@@ -593,7 +597,7 @@ fun CreateStockCardScreen(
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val pauseResumeLabel = if (isPaused) "Resume Stock Take" else "Pause Stock Take"
+                    val pauseResumeLabel = if (isPaused) "Resume" else "Pause"
                     val pauseResumeIcon = if (isPaused) Icons.Filled.PlayCircle else Icons.Filled.PauseCircle
 
                     TightActionButton(
@@ -612,7 +616,7 @@ fun CreateStockCardScreen(
                         },
                         enabled = isScanning && (!isPaused || !isDeviceScannerBusy),
                         accentColor = Color(0xFF455A64),
-                        modifier = Modifier.width(198.dp)
+                        modifier = Modifier.width(actionButtonWidth)
                     )
 
                     Spacer(modifier = Modifier.width(10.dp))
@@ -622,17 +626,24 @@ fun CreateStockCardScreen(
                         icon = Icons.Filled.CheckCircle,
                         onClick = {
                             if (!canConfirm) return@TightActionButton
-                            createStockViewModel.confirmScannedItems(location) { saved ->
-                                val msg = if (saved) "Inventory saved successfully!" else "Save failed."
+                            createStockViewModel.confirmScannedItems(location) { result ->
+                                val msg = when {
+                                    !result.success -> "Save failed."
+                                    result.duplicateCount > 0 -> "Stock items already exists"
+                                    else -> "Inventory saved successfully!"
+                                }
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                if (saved) {
+                                if (result.success) {
                                     selectedScannedItemId = null
+                                    selectedRowTopPx = null
+                                    selectedRowLeftPx = null
+                                    selectedRowWidthPx = null
                                 }
                             }
                         },
                         enabled = canConfirm,
                         accentColor = Color(0xFF2E7D32),
-                        modifier = Modifier.width(126.dp)
+                        modifier = Modifier.width(actionButtonWidth)
                     )
                 }
             }
@@ -679,6 +690,47 @@ fun CreateStockCardScreen(
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showEndSessionPrompt) {
+        AlertDialog(
+            onDismissRequest = { showEndSessionPrompt = false },
+            text = {
+                Text(
+                    text = "Do you want to end this stock take session?",
+                    color = Color(0xFF102A43),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showEndSessionPrompt = false
+                        isScanning = false
+                        isPaused = false
+                        context.sendBroadcast(Intent("com.android.scanner.DISABLED"))
+                    }
+                ) {
+                    Text(
+                        text = "Yes",
+                        color = Color(0xFF0A4A99),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showEndSessionPrompt = false }
+                ) {
+                    Text(
+                        text = "No",
+                        color = Color(0xFF546E7A),
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
         )
@@ -1056,7 +1108,7 @@ private fun CreateStockTopBar(onBack: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(
-            text = "CREATE STOCK",
+            text = "STOCK TAKE",
             color = Color.White,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,

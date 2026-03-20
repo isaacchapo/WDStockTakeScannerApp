@@ -17,11 +17,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -48,12 +51,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.stockapp.data.JsonFieldExtractor
@@ -68,6 +74,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @Composable
 fun ViewStockCardScreen(
@@ -78,6 +85,8 @@ fun ViewStockCardScreen(
     val inventoryGroups by stockViewModel.inventoryGroups.collectAsState()
     var selectedGroupKeys by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var openedGroupKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val groupListState = rememberLazyListState()
+    val stockItemListState = rememberLazyListState()
 
     val selectedGroups = inventoryGroups.filter { group -> selectedGroupKeys.contains(group.toKey()) }
     val selectedGroup = selectedGroups.singleOrNull()
@@ -198,7 +207,7 @@ fun ViewStockCardScreen(
                     openedGroup != null && shareMode -> "SHARE ITEMS"
                     openedGroup != null -> "INVENTORY ITEMS"
                     shareMode -> "SHARE STOCKS"
-                    else -> "AVAILABLE STOCKS"
+                    else -> "STOCK TAKE"
                 },
                 color = Color.White,
                 fontSize = 18.sp,
@@ -213,22 +222,26 @@ fun ViewStockCardScreen(
                 .padding(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Card(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+                verticalArrangement = Arrangement.Top
             ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    if (openedGroup != null) {
-                        TableIdentityHeader(group = openedGroup)
-                    }
+                if (openedGroup != null) {
+                    TableIdentityHeader(group = openedGroup)
+                }
 
-                    if (openedGroup == null) {
+                if (openedGroup == null) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.Top
+                    ) {
                         LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
+                            state = groupListState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             itemsIndexed(inventoryGroups) { index, group ->
@@ -253,22 +266,39 @@ fun ViewStockCardScreen(
                                 )
                             }
                         }
-                    } else {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFF0A4A99))
-                                .height(IntrinsicSize.Min),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TableCell("No", 0.3f, isHeader = true, textColor = Color.White)
-                            TableCell(tableColumns[0], 1f, isHeader = true, textColor = Color.White)
-                            TableCell(tableColumns[1], 1.2f, isHeader = true, textColor = Color.White)
-                            TableCell(tableColumns[2], 1f, isHeader = true, textColor = Color.White)
-                            TableCell(tableColumns[3], 1f, isHeader = true, textColor = Color.White, showRightDivider = false, textAlign = TextAlign.End)
-                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        LazyListScrollbar(
+                            state = groupListState,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0A4A99))
+                            .height(IntrinsicSize.Min),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TableCell("No", 0.3f, isHeader = true, textColor = Color.White)
+                        TableCell(tableColumns[0], 1f, isHeader = true, textColor = Color.White)
+                        TableCell(tableColumns[1], 1.2f, isHeader = true, textColor = Color.White)
+                        TableCell(tableColumns[2], 1f, isHeader = true, textColor = Color.White)
+                        TableCell(tableColumns[3], 1f, isHeader = true, textColor = Color.White, showRightDivider = false, textAlign = TextAlign.End)
+                    }
 
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        LazyColumn(
+                            state = stockItemListState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        ) {
                             itemsIndexed(stockItems) { index, item ->
                                 val rowColor = if (index % 2 == 0) Color.White else Color(0xFFF8FAFD)
                                 val itemFields = remember(item.variableData) {
@@ -301,6 +331,11 @@ fun ViewStockCardScreen(
                                 Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFECEFF1)))
                             }
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        LazyListScrollbar(
+                            state = stockItemListState,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
                     }
                 }
             }
@@ -475,6 +510,64 @@ private fun BottomActionButton(
     }
 }
 
+@Composable
+private fun LazyListScrollbar(
+    state: LazyListState,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val layoutInfo = state.layoutInfo
+    val viewportHeightPx = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(0)
+    val visibleItems = layoutInfo.visibleItemsInfo
+    val averageItemHeightPx = if (visibleItems.isNotEmpty()) {
+        visibleItems.sumOf { it.size }.toFloat() / visibleItems.size
+    } else {
+        viewportHeightPx.toFloat()
+    }
+    val estimatedContentHeightPx = if (layoutInfo.totalItemsCount > 0) {
+        averageItemHeightPx * layoutInfo.totalItemsCount
+    } else {
+        viewportHeightPx.toFloat()
+    }.coerceAtLeast(viewportHeightPx.toFloat())
+    val firstVisibleItem = visibleItems.firstOrNull()
+    val scrollOffsetPx = if (firstVisibleItem != null) {
+        (firstVisibleItem.index * averageItemHeightPx - firstVisibleItem.offset).coerceAtLeast(0f)
+    } else {
+        0f
+    }
+    val minThumbHeightPx = with(density) { 36.dp.toPx() }
+    val thumbHeightPx = if (estimatedContentHeightPx == 0f || viewportHeightPx == 0) {
+        viewportHeightPx.toFloat()
+    } else {
+        ((viewportHeightPx.toFloat() / estimatedContentHeightPx) * viewportHeightPx)
+            .coerceIn(minThumbHeightPx, viewportHeightPx.toFloat())
+    }
+    val maxThumbOffsetPx = (viewportHeightPx - thumbHeightPx).coerceAtLeast(0f)
+    val maxScrollPx = (estimatedContentHeightPx - viewportHeightPx).coerceAtLeast(1f)
+    val thumbOffsetPx = if (maxThumbOffsetPx == 0f) {
+        0f
+    } else {
+        (scrollOffsetPx / maxScrollPx).coerceIn(0f, 1f) * maxThumbOffsetPx
+    }
+
+    Box(
+        modifier = modifier
+            .width(7.dp)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xFFD8E5F7))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(with(density) { thumbHeightPx.toDp() })
+                .offset { IntOffset(0, thumbOffsetPx.roundToInt()) }
+                .clip(RoundedCornerShape(50))
+                .background(Color(0xFF7FA6D6))
+        )
+    }
+}
+
 private fun InventoryGroup.toKey(): String = listOf(ownerUid, location, sid).joinToString("|")
 
 private fun resolveTableColumns(items: List<StockItem>): List<String> {
@@ -558,7 +651,7 @@ private fun InventoryGroupRowCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Table ${index + 1}",
+                    text = "Stock ${index + 1}",
                     color = Color(0xFF0A4A99),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
