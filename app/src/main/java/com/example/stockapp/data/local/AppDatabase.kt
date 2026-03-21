@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 @Database(
     entities = [StockItem::class, User::class, SavedLocation::class],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -58,7 +58,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_8_9,
                     MIGRATION_9_10,
                     MIGRATION_10_11,
-                    MIGRATION_11_12
+                    MIGRATION_11_12,
+                    MIGRATION_12_13
                 )
                 .build()
                 INSTANCE = instance
@@ -184,6 +185,15 @@ abstract class AppDatabase : RoomDatabase() {
                     "UPDATE stock_table SET identifierKey = 'identifier' " +
                         "WHERE trim(identifierKey) = ''"
                 )
+            }
+        }
+
+        /**
+         * Migration from version 12 to 13: add upload timestamp column.
+         */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE stock_table ADD COLUMN uploadedAt INTEGER")
             }
         }
     }

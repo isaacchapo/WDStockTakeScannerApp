@@ -430,15 +430,19 @@ fun ViewStockCardScreen(
                                 stockItems = itemsForUpload
                             )
                             isUploading = false
-                            result.onSuccess { msg ->
+                            if (result.isSuccess) {
+                                val msg = result.getOrNull().orEmpty()
+                                stockViewModel.markItemsUploaded(itemsForUpload)
                                 showStockUploadSuccessNotification(
                                     context = context,
                                     title = "Stock Upload Successful",
                                     message = "${itemsForUpload.size} items uploaded."
                                 )
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show(); showUploadDialog = false
-                            }.onFailure { err ->
-                                Toast.makeText(context, err.message ?: "Upload failed.", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                showUploadDialog = false
+                            } else {
+                                val err = result.exceptionOrNull()
+                                Toast.makeText(context, err?.message ?: "Upload failed.", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -677,11 +681,18 @@ private fun InventoryGroupRowCard(
                 color = Color(0xFF455A64),
                 fontSize = 12.sp
             )
-            Text(
-                text = "Schemas: ${group.schemaCount}",
-                color = Color(0xFF607D8B),
-                fontSize = 11.sp
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    text = if (group.isUploaded) "Uploaded" else "Pending upload",
+                    color = if (group.isUploaded) Color(0xFF2E7D32) else Color(0xFFE65100),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.End
+                )
+            }
         }
     }
 }

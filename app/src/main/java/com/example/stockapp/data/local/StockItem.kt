@@ -27,6 +27,7 @@ data class StockItem(
     val orderNo: String? = null,
     val location: String = "",
     val dateScanned: Long = System.currentTimeMillis(),
+    val uploadedAt: Long? = null,
     val variableData: String = "{}",
     val ownerUid: String = ""
 )

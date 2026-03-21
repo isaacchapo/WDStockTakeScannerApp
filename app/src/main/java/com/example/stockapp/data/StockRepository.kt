@@ -179,6 +179,19 @@ class StockRepository(
         stockItemDao.deleteStockItem(ownerUid, stockItemId)
     }
 
+    suspend fun markItemsUploaded(
+        ownerUid: String,
+        stockItemIds: List<String>,
+        uploadedAt: Long = System.currentTimeMillis()
+    ) {
+        val ids = stockItemIds
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
+        if (ids.isEmpty()) return
+        stockItemDao.markItemsUploaded(ownerUid, ids, uploadedAt)
+    }
+
     suspend fun uploadInventory(
         baseUrl: String,
         endpointPath: String,

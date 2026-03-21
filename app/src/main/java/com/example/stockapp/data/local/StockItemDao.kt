@@ -42,6 +42,8 @@ interface StockItemDao {
         "SELECT ownerUid, location, sid, " +
             "COUNT(*) AS totalRecords, " +
             "COUNT(DISTINCT identifierKey) AS schemaCount, " +
+            "CASE WHEN COUNT(*) > 0 AND COUNT(*) = SUM(CASE WHEN uploadedAt IS NOT NULL THEN 1 ELSE 0 END) " +
+            "THEN 1 ELSE 0 END AS isUploaded, " +
             "MAX(dateScanned) AS lastScannedAt " +
             "FROM stock_table " +
             "WHERE ownerUid = :ownerUid " +
@@ -141,6 +143,16 @@ interface StockItemDao {
     suspend fun deleteStockItem(
         ownerUid: String,
         id: String
+    )
+
+    @Query(
+        "UPDATE stock_table SET uploadedAt = :uploadedAt " +
+            "WHERE ownerUid = :ownerUid AND id IN (:ids)"
+    )
+    suspend fun markItemsUploaded(
+        ownerUid: String,
+        ids: List<String>,
+        uploadedAt: Long
     )
 
     @Query(

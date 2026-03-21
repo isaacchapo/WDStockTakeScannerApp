@@ -163,6 +163,18 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         )
     }
 
+    suspend fun markItemsUploaded(
+        stockItems: List<StockItem>,
+        uploadedAt: Long = System.currentTimeMillis()
+    ) {
+        val ownerUid = _activeUserUid.value ?: return
+        repository.markItemsUploaded(
+            ownerUid = ownerUid,
+            stockItemIds = stockItems.map { it.id },
+            uploadedAt = uploadedAt
+        )
+    }
+
     fun updateTableLocation(
         oldLocation: String,
         oldSid: String,

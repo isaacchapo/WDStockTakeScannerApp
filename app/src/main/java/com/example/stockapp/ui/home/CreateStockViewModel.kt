@@ -90,7 +90,10 @@ class CreateStockViewModel(
 
         val scannedItem = StockItem(
             sid = activeSid,
-            identifierKey = activeSid,
+            identifierKey = buildIdentifierKey(
+                fields = parsedData.fields,
+                fallbackPayload = parsedData.variableData
+            ),
             orderNo = null,
             location = "",
             dateScanned = System.currentTimeMillis(),
@@ -139,13 +142,17 @@ class CreateStockViewModel(
                         buildFingerprintForItem(persistedItem).takeIf { it.isNotBlank() }
                     }
                     .toHashSet()
-                val locationDisplayName =
-                    _savedLocations.value.firstOrNull { it.locationNormalized == normalizedLocation }?.location
-                        ?: location.trim()
+                val existingLocation = _savedLocations.value
+                    .firstOrNull { it.locationNormalized == normalizedLocation }
+                val sessionSid = existingLocation?.sid
+                    ?.takeIf { it.isNotBlank() }
+                    ?: activeSid
+                val locationDisplayName = existingLocation?.location ?: location.trim()
 
                 val itemsToSave = tempItems.map { item ->
                     item.copy(
-                        sid = activeSid,
+                        sid = sessionSid,
+                        identifierKey = buildIdentifierKeyFromItem(item),
                         location = locationDisplayName,
                         ownerUid = ownerUid
                     )
@@ -172,7 +179,7 @@ class CreateStockViewModel(
                             ownerUid = ownerUid,
                             locationNormalized = normalizedLocation,
                             location = locationDisplayName,
-                            sid = activeSid
+                            sid = sessionSid
                         )
                     )
 
@@ -281,6 +288,14 @@ class CreateStockViewModel(
         )
     }
 
+    private fun buildIdentifierKeyFromItem(item: StockItem): String {
+        val parsed = QrDataParser.parseQrData(item.variableData)
+        return buildIdentifierKey(
+            fields = parsed?.fields.orEmpty(),
+            fallbackPayload = item.variableData
+        )
+    }
+
     private fun buildScanFingerprint(
         fields: Map<String, String>,
         fallbackPayload: String
@@ -324,6 +339,23 @@ class CreateStockViewModel(
         return raw.trim()
             .lowercase(Locale.ROOT)
             .replace(WHITESPACE_REGEX, " ")
+    }
+
+    private fun buildIdentifierKey(
+        fields: Map<String, String>,
+        fallbackPayload: String
+    ): String {
+        val normalizedKeys = fields.keys
+            .map(::normalizeFingerprintKey)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sorted()
+
+        if (normalizedKeys.isNotEmpty()) {
+            return normalizedKeys.joinToString("|")
+        }
+
+        return normalizeFingerprintValue(fallbackPayload).ifBlank { "data" }
     }
 
     private fun generateSid(length: Int = 6): String {

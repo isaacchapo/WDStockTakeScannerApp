@@ -6,5 +6,6 @@ data class InventoryGroup(
     val sid: String,
     val totalRecords: Int,
     val schemaCount: Int,
+    val isUploaded: Boolean,
     val lastScannedAt: Long
 )

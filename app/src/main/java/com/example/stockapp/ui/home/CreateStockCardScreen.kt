@@ -1,15 +1,18 @@
 package com.example.stockapp.ui.home
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.ContextWrapper
 import android.os.Build
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.util.Log
 import android.view.View
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.Toast
@@ -179,6 +182,12 @@ fun CreateStockCardScreen(
 
     var location by remember { mutableStateOf("") }
     val actionButtonWidth = 126.dp
+    val normalizedLocationInput = location.trim().lowercase(Locale.ROOT)
+    val displaySid = savedLocations
+        .firstOrNull { it.locationNormalized == normalizedLocationInput }
+        ?.sid
+        ?.takeIf { it.isNotBlank() }
+        ?: currentSid
 
     val canConfirm = scannedItems.isNotEmpty() &&
         location.isNotBlank() &&
@@ -203,6 +212,23 @@ fun CreateStockCardScreen(
             showAddLocationForm -> showAddLocationForm = false
             showExitSessionPrompt -> showExitSessionPrompt = false
             else -> requestExitNavigation()
+        }
+    }
+
+    DisposableEffect(context) {
+        val activity = context.findActivity()
+        val window = activity?.window
+        val previousSoftInputMode = window?.attributes?.softInputMode
+
+        if (window != null) {
+            val preservedState = (previousSoftInputMode ?: 0) and WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE
+            window.setSoftInputMode(preservedState or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
+        }
+
+        onDispose {
+            if (window != null && previousSoftInputMode != null) {
+                window.setSoftInputMode(previousSoftInputMode)
+            }
         }
     }
 
@@ -296,7 +322,7 @@ fun CreateStockCardScreen(
                             StatusIndicator(statusText = statusText)
                             if (isTopCardCollapsed) {
                                 Text(
-                                    text = "LOC:${location.ifBlank { "-" }}  UID:$loggedInUser  SID:$currentSid",
+                                    text = "LOC:${location.ifBlank { "-" }}  UID:$loggedInUser  SID:$displaySid",
                                     color = Color(0xFF4F6787),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
@@ -308,7 +334,7 @@ fun CreateStockCardScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     SessionChip(label = "UID", value = loggedInUser)
-                                    SessionChip(label = "SID", value = currentSid)
+                                    SessionChip(label = "SID", value = displaySid)
                                 }
                             }
                             IconButton(
@@ -1364,4 +1390,12 @@ private fun extractBarcodeFromIntent(intent: Intent): String? {
         }
     }
     return null
+}
+
+private tailrec fun Context.findActivity(): Activity? {
+    return when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 }
