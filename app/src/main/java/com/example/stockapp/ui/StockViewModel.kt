@@ -7,6 +7,8 @@ import com.example.stockapp.data.StockRepository
 import com.example.stockapp.data.local.InventoryGroup
 import com.example.stockapp.data.local.SchemaGroup
 import com.example.stockapp.data.local.StockItem
+import com.example.stockapp.data.local.UploadDevice
+import android.util.Log
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * A ViewModel that provides data to the UI and survives configuration changes.
@@ -54,6 +57,18 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         initialValue = emptyList()
     )
 
+    val uploadDevices: StateFlow<List<UploadDevice>> = activeUserUid.flatMapLatest { uid ->
+        if (uid.isNullOrBlank()) {
+            flowOf(emptyList())
+        } else {
+            repository.getUploadDevices(uid)
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     /**
      * A flow that represents the result of a login attempt.
      */
@@ -61,14 +76,30 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     val loginResult = _loginResult.asStateFlow()
     private val _loginInProgress = MutableStateFlow(false)
     val loginInProgress = _loginInProgress.asStateFlow()
+    private val _createInProgress = MutableStateFlow(false)
+    val createInProgress = _createInProgress.asStateFlow()
 
     /**
      * Creates a new user and inserts it into the database.
      * @param uid The unique identifier for the user.
      * @param password The user's password.
      */
-    fun createUser(uid: String, password: String) = viewModelScope.launch {
-        repository.createUser(uid, password)
+    fun createUser(
+        uid: String,
+        password: String,
+        onComplete: (Boolean) -> Unit = {}
+    ) = viewModelScope.launch {
+        if (_createInProgress.value) return@launch
+        _createInProgress.value = true
+        try {
+            val created = repository.createUser(uid, password)
+            onComplete(created)
+        } catch (e: Exception) {
+            Log.e("StockViewModel", "Create user failed", e)
+            onComplete(false)
+        } finally {
+            _createInProgress.value = false
+        }
     }
 
     /**
@@ -89,6 +120,9 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
             if (loginSucceeded) {
                 _activeUserUid.value = uid
             }
+        } catch (e: Exception) {
+            Log.e("StockViewModel", "Login failed", e)
+            _loginResult.value = false
         } finally {
             _loginInProgress.value = false
         }
@@ -205,6 +239,52 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     fun deleteStockItem(stockItemId: String) = viewModelScope.launch {
         val ownerUid = _activeUserUid.value ?: return@launch
         repository.deleteStockItem(ownerUid, stockItemId)
+    }
+
+    fun addUploadDevice(
+        name: String,
+        baseUrl: String,
+        endpointPath: String,
+        apiKey: String,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) = viewModelScope.launch {
+        val ownerUid = _activeUserUid.value
+            ?: return@launch onComplete(Result.failure(IllegalStateException("No active user found.")))
+
+        val trimmedName = name.trim()
+        val trimmedBaseUrl = baseUrl.trim()
+        val trimmedEndpointPath = endpointPath.trim().ifBlank { DEFAULT_UPLOAD_ENDPOINT_PATH }
+        val trimmedApiKey = apiKey.trim()
+        if (trimmedName.isBlank()) {
+            return@launch onComplete(Result.failure(IllegalArgumentException("Device name is required.")))
+        }
+        if (trimmedBaseUrl.isBlank()) {
+            return@launch onComplete(Result.failure(IllegalArgumentException("Base URL is required.")))
+        }
+        if (trimmedApiKey.isBlank()) {
+            return@launch onComplete(Result.failure(IllegalArgumentException("API key is required.")))
+        }
+
+        runCatching {
+            repository.upsertUploadDevice(
+                UploadDevice(
+                    ownerUid = ownerUid,
+                    nameNormalized = trimmedName.lowercase(Locale.ROOT),
+                    name = trimmedName,
+                    baseUrl = trimmedBaseUrl,
+                    endpointPath = trimmedEndpointPath,
+                    apiKey = trimmedApiKey
+                )
+            )
+        }.onSuccess {
+            onComplete(Result.success(Unit))
+        }.onFailure { error ->
+            onComplete(Result.failure(error))
+        }
+    }
+
+    companion object {
+        private const val DEFAULT_UPLOAD_ENDPOINT_PATH = "/api/stock/upload"
     }
 }
 

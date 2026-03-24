@@ -14,6 +14,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -460,6 +461,7 @@ fun CreateStockCardScreen(
                                     modifier = Modifier
                                         .height(36.dp),
                                     shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, StockAppColors.CardBorder),
                                     colors = ButtonDefaults.outlinedButtonColors(
                                         containerColor = StockAppColors.CardSurface,
                                         disabledContainerColor = StockAppColors.DisabledSurface,
@@ -502,6 +504,7 @@ fun CreateStockCardScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(StockAppColors.NavyMid, RoundedCornerShape(8.dp))
+                                    .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(8.dp))
                                     .padding(horizontal = 8.dp, vertical = 8.dp)
                             ) {
                                 Text("No", modifier = Modifier.weight(0.3f), color = StockAppColors.TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -883,9 +886,10 @@ fun CreateStockCardScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 28.dp),
+                    .padding(horizontal = 28.dp)
+                    .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(14.dp)),
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
+                colors = CardDefaults.cardColors(containerColor = StockAppColors.NavyMid),
                 elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
             ) {
                 Column(
@@ -895,7 +899,7 @@ fun CreateStockCardScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Do you want to proceed with this action? It will cancel the current stock take session",
+                        text = "Do you want to proceed with this action? You will cancel the current stock session",
                         color = StockAppColors.TextPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -1062,7 +1066,7 @@ private fun StockNamePrompt(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 28.dp)
-                .background(StockAppColors.CardSurface, RoundedCornerShape(12.dp))
+                .background(StockAppColors.NavyMid, RoundedCornerShape(12.dp))
                 .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(12.dp))
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)

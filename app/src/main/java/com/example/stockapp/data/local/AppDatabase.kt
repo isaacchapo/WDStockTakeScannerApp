@@ -11,8 +11,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * The Room database for this app.
  */
 @Database(
-    entities = [StockItem::class, User::class, SavedLocation::class],
-    version = 13,
+    entities = [StockItem::class, User::class, SavedLocation::class, UploadDevice::class],
+    version = 15,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -31,6 +31,11 @@ abstract class AppDatabase : RoomDatabase() {
      * @return The DAO for the saved_location_table.
      */
     abstract fun savedLocationDao(): SavedLocationDao
+
+    /**
+     * @return The DAO for the upload_device_table.
+     */
+    abstract fun uploadDeviceDao(): UploadDeviceDao
 
     companion object {
         /**
@@ -59,7 +64,9 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_9_10,
                     MIGRATION_10_11,
                     MIGRATION_11_12,
-                    MIGRATION_12_13
+                    MIGRATION_12_13,
+                    MIGRATION_13_14,
+                    MIGRATION_14_15
                 )
                 .build()
                 INSTANCE = instance
@@ -194,6 +201,33 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_12_13 = object : Migration(12, 13) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN uploadedAt INTEGER")
+            }
+        }
+
+        /**
+         * Migration from version 13 to 14: add stock name column.
+         */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE stock_table ADD COLUMN stockName TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        /**
+         * Migration from version 14 to 15: add upload devices table.
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS upload_device_table (" +
+                        "ownerUid TEXT NOT NULL, " +
+                        "nameNormalized TEXT NOT NULL, " +
+                        "name TEXT NOT NULL, " +
+                        "baseUrl TEXT NOT NULL, " +
+                        "endpointPath TEXT NOT NULL, " +
+                        "apiKey TEXT NOT NULL, " +
+                        "PRIMARY KEY(ownerUid, nameNormalized))"
+                )
             }
         }
     }

@@ -10,7 +10,8 @@ class StockApplication : Application() {
         StockRepository(
             database.stockItemDao(),
             database.userDao(),
-            database.savedLocationDao()
+            database.savedLocationDao(),
+            database.uploadDeviceDao()
         )
     }
 }

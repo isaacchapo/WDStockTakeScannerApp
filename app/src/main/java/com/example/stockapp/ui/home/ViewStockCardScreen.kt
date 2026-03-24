@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -69,13 +70,13 @@ import com.example.stockapp.data.JsonFieldExtractor
 import com.example.stockapp.data.QrDataParser
 import com.example.stockapp.data.local.InventoryGroup
 import com.example.stockapp.data.local.StockItem
+import com.example.stockapp.data.local.UploadDevice
 import com.example.stockapp.ui.StockViewModel
 import com.example.stockapp.ui.common.StockAppBackground
 import com.example.stockapp.ui.common.ScreenAppear
 import com.example.stockapp.ui.common.StockAppColors
 import com.example.stockapp.ui.common.stockOutlinedTextFieldColors
 import com.example.stockapp.ui.sharing.shareStockSchemaAsStyledPdf
-import com.example.stockapp.ui.upload.ApiUploadPreferences
 import com.example.stockapp.ui.upload.showStockUploadSuccessNotification
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -136,17 +137,21 @@ fun ViewStockCardScreen(
     
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val savedUploadConfig = remember(context) { ApiUploadPreferences.load(context) }
+    val uploadDevices by stockViewModel.uploadDevices.collectAsState()
 
     var showUpdateGroupDialog by remember { mutableStateOf(false) }
     var updateLocation by remember { mutableStateOf("") }
 
-    var showUploadDialog by remember { mutableStateOf(false) }
-    var uploadBaseUrl by rememberSaveable { mutableStateOf(savedUploadConfig.baseUrl) }
-    var uploadEndpointPath by rememberSaveable { mutableStateOf(savedUploadConfig.endpointPath) }
-    var uploadApiKey by rememberSaveable { mutableStateOf(savedUploadConfig.apiKey) }
+    var showChooseDeviceDialog by remember { mutableStateOf(false) }
+    var showAddDeviceDialog by remember { mutableStateOf(false) }
+    var deviceName by rememberSaveable { mutableStateOf("") }
+    var deviceBaseUrl by rememberSaveable { mutableStateOf("") }
+    var deviceEndpointPath by rememberSaveable { mutableStateOf("/api/stock/upload") }
+    var deviceApiKey by rememberSaveable { mutableStateOf("") }
+    var selectedUploadDeviceKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingUploadItems by remember { mutableStateOf<List<StockItem>>(emptyList()) }
     var isUploading by remember { mutableStateOf(false) }
+    var isSavingDevice by remember { mutableStateOf(false) }
 
     fun toggleGroupSelection(groupKey: String) {
         selectedGroupKeys = if (selectedGroupKeys.contains(groupKey)) {
@@ -207,6 +212,14 @@ fun ViewStockCardScreen(
         }
     }
 
+    LaunchedEffect(uploadDevices, showChooseDeviceDialog) {
+        if (!showChooseDeviceDialog) return@LaunchedEffect
+        val validKeys = uploadDevices.map { it.nameNormalized }.toSet()
+        if (selectedUploadDeviceKey == null || selectedUploadDeviceKey !in validKeys) {
+            selectedUploadDeviceKey = uploadDevices.firstOrNull()?.nameNormalized
+        }
+    }
+
     StockAppBackground {
         ScreenAppear {
             Column(
@@ -259,6 +272,28 @@ fun ViewStockCardScreen(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.align(Alignment.Center)
                     )
+
+                    if (openedGroup == null) {
+                        TextButton(
+                            onClick = {
+                                selectedGroupKeys = inventoryGroups
+                                    .mapTo(mutableSetOf()) { it.toKey() }
+                            },
+                            enabled = inventoryGroups.isNotEmpty(),
+                            modifier = Modifier.align(Alignment.CenterEnd)
+                        ) {
+                            Text(
+                                text = "Select All",
+                                color = if (inventoryGroups.isNotEmpty()) {
+                                    StockAppColors.AccentCyan
+                                } else {
+                                    StockAppColors.DisabledText
+                                },
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
 
                 Column(
@@ -275,6 +310,7 @@ fun ViewStockCardScreen(
                     ) {
                         if (openedGroup != null) {
                             TableIdentityHeader(group = openedGroup)
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
 
                         if (openedGroup == null) {
@@ -321,10 +357,13 @@ fun ViewStockCardScreen(
                             )
                         }
                     } else {
+                        val tableHeaderShape = RoundedCornerShape(8.dp)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(StockAppColors.NavyMid)
+                                .clip(tableHeaderShape)
+                                .background(StockAppColors.NavyBase)
+                                .border(1.dp, StockAppColors.CardBorder, tableHeaderShape)
                                 .height(IntrinsicSize.Min),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -389,8 +428,8 @@ fun ViewStockCardScreen(
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(0.5.dp)
-                                            .background(StockAppColors.Divider)
+                                            .height(1.dp)
+                                            .background(StockAppColors.CardBorder)
                                     )
                                 }
                             }
@@ -437,15 +476,20 @@ fun ViewStockCardScreen(
                                         Toast.makeText(context, "No stock items", Toast.LENGTH_SHORT).show()
                                     } else {
                                         pendingUploadItems = items
-                                        showUploadDialog = true
+                                        selectedUploadDeviceKey = uploadDevices.firstOrNull()?.nameNormalized
+                                        showChooseDeviceDialog = true
                                     }
                                 }
                             }
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             BottomActionButton("Update", StockAppColors.AccentAmber, enabled = selectedGroups.size == 1) {
                                 val group = selectedGroup ?: return@BottomActionButton
                                 updateLocation = group.location
                                 showUpdateGroupDialog = true
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            BottomActionButton("Add Device", StockAppColors.AccentCyan, enabled = true) {
+                                showAddDeviceDialog = true
                             }
                         }
                     }
@@ -454,65 +498,156 @@ fun ViewStockCardScreen(
         }
     }
 
-    if (showUploadDialog) {
+    if (showAddDeviceDialog) {
         AlertDialog(
-            onDismissRequest = { if (!isUploading) showUploadDialog = false },
-            title = { Text("Upload Inventory Data", color = StockAppColors.TextPrimary) },
+            onDismissRequest = { if (!isSavingDevice) showAddDeviceDialog = false },
+            title = { Text("Add Device", color = StockAppColors.TextPrimary) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Enter API server LAN URL (e.g., http://192.168.1.15:5000).",
-                        color = StockAppColors.TextSecondary
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = deviceName,
+                        onValueChange = { deviceName = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = stockOutlinedTextFieldColors()
                     )
                     OutlinedTextField(
-                        value = uploadBaseUrl,
-                        onValueChange = { uploadBaseUrl = it },
+                        value = deviceBaseUrl,
+                        onValueChange = { deviceBaseUrl = it },
                         label = { Text("Base URL") },
                         singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                         colors = stockOutlinedTextFieldColors()
                     )
                     OutlinedTextField(
-                        value = uploadEndpointPath,
-                        onValueChange = { uploadEndpointPath = it },
+                        value = deviceEndpointPath,
+                        onValueChange = { deviceEndpointPath = it },
                         label = { Text("Path (optional)") },
                         singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                         colors = stockOutlinedTextFieldColors()
                     )
                     OutlinedTextField(
-                        value = uploadApiKey,
-                        onValueChange = { uploadApiKey = it },
+                        value = deviceApiKey,
+                        onValueChange = { deviceApiKey = it },
                         label = { Text("API Key") },
                         singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                         colors = stockOutlinedTextFieldColors()
                     )
-                    if (isUploading) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isSavingDevice) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(18.dp),
                                 strokeWidth = 2.dp,
                                 color = StockAppColors.AccentCyan
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Saving...", color = StockAppColors.TextSecondary)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !isSavingDevice &&
+                        deviceName.trim().isNotBlank() &&
+                        deviceBaseUrl.trim().isNotBlank() &&
+                        deviceApiKey.trim().isNotBlank(),
+                    onClick = {
+                        isSavingDevice = true
+                        stockViewModel.addUploadDevice(
+                            name = deviceName,
+                            baseUrl = deviceBaseUrl,
+                            endpointPath = deviceEndpointPath,
+                            apiKey = deviceApiKey
+                        ) { result ->
+                            isSavingDevice = false
+                            if (result.isSuccess) {
+                                Toast.makeText(context, "Device saved.", Toast.LENGTH_SHORT).show()
+                                selectedUploadDeviceKey = deviceName.trim().lowercase(Locale.ROOT)
+                                deviceName = ""
+                                deviceBaseUrl = ""
+                                deviceEndpointPath = "/api/stock/upload"
+                                deviceApiKey = ""
+                                showAddDeviceDialog = false
+                            } else {
+                                val err = result.exceptionOrNull()
+                                Toast.makeText(context, err?.message ?: "Failed to save device.", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                ) {
+                    Text("Add", color = StockAppColors.AccentCyan)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDeviceDialog = false }, enabled = !isSavingDevice) {
+                    Text("Cancel", color = StockAppColors.TextSecondary)
+                }
+            },
+            containerColor = StockAppColors.CardSurface,
+            titleContentColor = StockAppColors.TextPrimary,
+            textContentColor = StockAppColors.TextSecondary
+        )
+    }
+
+    if (showChooseDeviceDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isUploading) showChooseDeviceDialog = false },
+            title = { Text("Choose Device", color = StockAppColors.TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (uploadDevices.isEmpty()) {
+                        Text(
+                            text = "No devices available. Add a device first.",
+                            color = StockAppColors.TextSecondary
+                        )
+                    } else {
+                        uploadDevices.forEach { device ->
+                            UploadDeviceRow(
+                                device = device,
+                                isSelected = selectedUploadDeviceKey == device.nameNormalized,
+                                onSelect = { selectedUploadDeviceKey = device.nameNormalized }
+                            )
+                        }
+                    }
+
+                    if (isUploading) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = StockAppColors.AccentCyan
+                            )
                             Text("Uploading...", color = StockAppColors.TextSecondary)
                         }
                     }
                 }
             },
             confirmButton = {
-                Button(
-                    enabled = !isUploading && uploadBaseUrl.trim().isNotBlank() && uploadApiKey.trim().isNotBlank(),
+                TextButton(
+                    enabled = !isUploading &&
+                        uploadDevices.isNotEmpty() &&
+                        selectedUploadDeviceKey != null &&
+                        pendingUploadItems.isNotEmpty(),
                     onClick = {
+                        val device = uploadDevices
+                            .firstOrNull { it.nameNormalized == selectedUploadDeviceKey }
+                            ?: return@TextButton
                         val itemsForUpload = pendingUploadItems
-                        val baseUrl = uploadBaseUrl.trim()
-                        val endpointPath = uploadEndpointPath.trim()
-                        val apiKey = uploadApiKey.trim()
                         isUploading = true
-                        ApiUploadPreferences.save(context, baseUrl, endpointPath, apiKey)
                         coroutineScope.launch {
                             val result = stockViewModel.uploadInventory(
-                                baseUrl = baseUrl,
-                                endpointPath = endpointPath,
-                                apiKey = apiKey,
+                                baseUrl = device.baseUrl,
+                                endpointPath = device.endpointPath,
+                                apiKey = device.apiKey,
                                 stockItems = itemsForUpload
                             )
                             isUploading = false
@@ -525,24 +660,20 @@ fun ViewStockCardScreen(
                                     message = "${itemsForUpload.size} items uploaded."
                                 )
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                showUploadDialog = false
+                                showChooseDeviceDialog = false
+                                pendingUploadItems = emptyList()
                             } else {
                                 val err = result.exceptionOrNull()
                                 Toast.makeText(context, err?.message ?: "Upload failed.", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
-                ,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = StockAppColors.AccentCyan,
-                        disabledContainerColor = StockAppColors.DisabledSurface,
-                        contentColor = StockAppColors.TextPrimary,
-                        disabledContentColor = StockAppColors.DisabledText
-                    )
-                ) { Text("Upload") }
+                ) {
+                    Text("Upload", color = StockAppColors.AccentCyan)
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showUploadDialog = false }, enabled = !isUploading) {
+                TextButton(onClick = { showChooseDeviceDialog = false }, enabled = !isUploading) {
                     Text("Cancel", color = StockAppColors.TextSecondary)
                 }
             },
@@ -628,8 +759,7 @@ private fun BottomActionButton(
         ),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
-            .height(38.dp)
-            .width(138.dp)
+            .height(36.dp)
     ) {
         Text(
             text = text,
@@ -637,6 +767,41 @@ private fun BottomActionButton(
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold
         )
+    }
+}
+
+@Composable
+private fun UploadDeviceRow(
+    device: UploadDevice,
+    isSelected: Boolean,
+    onSelect: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = isSelected,
+            onClick = onSelect
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = device.name,
+                color = StockAppColors.TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
@@ -788,14 +953,14 @@ private fun InventoryGroupRowCard(
                 )
             }
             .border(
-                width = 1.dp,
+                width = if (isSelected) 2.dp else 1.dp,
                 color = if (isSelected) StockAppColors.AccentCyan else StockAppColors.CardBorder,
                 shape = cardShape
             ),
         shape = cardShape,
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                StockAppColors.AccentCyan.copy(alpha = 0.18f)
+                StockAppColors.AccentCyan.copy(alpha = 0.14f)
             } else {
                 StockAppColors.CardSurface
             }
@@ -863,30 +1028,58 @@ private fun InventoryGroupRowCard(
 
 @Composable
 private fun TableIdentityHeader(group: InventoryGroup) {
-    Column(
+    val headerShape = RoundedCornerShape(10.dp)
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(StockAppColors.FieldSurface)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .clip(headerShape)
+            .background(StockAppColors.CardSurface)
+            .border(1.dp, StockAppColors.CardBorder, headerShape)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TableIdentityValue(
+            label = "UID",
+            value = group.ownerUid,
+            modifier = Modifier.weight(1f)
+        )
+        TableIdentityValue(
+            label = "SID",
+            value = group.sid,
+            modifier = Modifier.weight(1f)
+        )
+        TableIdentityValue(
+            label = "Location",
+            value = group.location,
+            modifier = Modifier.weight(1.2f)
+        )
+    }
+}
+
+@Composable
+private fun TableIdentityValue(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(
-            text = "UID: ${group.ownerUid}",
-            color = StockAppColors.AccentCyan,
-            fontSize = 11.sp,
+            text = label,
+            color = StockAppColors.TextSecondary,
+            fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold
         )
         Text(
-            text = "SID: ${group.sid}",
+            text = value.ifBlank { "-" },
             color = StockAppColors.AccentCyan,
             fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            text = "Location: ${group.location}",
-            color = StockAppColors.AccentCyan,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

@@ -6,12 +6,16 @@ import com.example.stockapp.data.local.SavedLocationDao
 import com.example.stockapp.data.local.SchemaGroup
 import com.example.stockapp.data.local.StockItem
 import com.example.stockapp.data.local.StockItemDao
+import com.example.stockapp.data.local.UploadDevice
+import com.example.stockapp.data.local.UploadDeviceDao
 import com.example.stockapp.data.local.User
 import com.example.stockapp.data.local.UserDao
 import com.example.stockapp.data.remote.StockUploadClient
 import com.example.stockapp.data.remote.StockUploadItemDto
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 import java.util.Locale
 
@@ -21,7 +25,10 @@ import java.util.Locale
 class StockRepository(
     private val stockItemDao: StockItemDao,
     private val userDao: UserDao,
-    private val savedLocationDao: SavedLocationDao
+    private val savedLocationDao: SavedLocationDao,
+    private val uploadDeviceDao: UploadDeviceDao,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
     private val stockUploadClient = StockUploadClient()
 
@@ -31,7 +38,9 @@ class StockRepository(
     fun getAllStockItems(ownerUid: String): Flow<List<StockItem>> = stockItemDao.getAllStockItems(ownerUid)
 
     suspend fun getAllStockItemsSnapshot(ownerUid: String): List<StockItem> =
-        stockItemDao.getAllStockItemsSnapshot(ownerUid)
+        withContext(ioDispatcher) {
+            stockItemDao.getAllStockItemsSnapshot(ownerUid)
+        }
 
     /**
      * A flow of table groups (UID + location + SID).
@@ -45,16 +54,35 @@ class StockRepository(
         savedLocationDao.getSavedLocations(ownerUid)
 
     /**
+     * A flow of upload devices for a specific user.
+     */
+    fun getUploadDevices(ownerUid: String): Flow<List<UploadDevice>> =
+        uploadDeviceDao.getUploadDevices(ownerUid)
+
+    /**
      * Gets a specific saved location.
      */
     suspend fun getSavedLocation(ownerUid: String, locationNormalized: String): SavedLocation? =
-        savedLocationDao.getSavedLocation(ownerUid, locationNormalized)
+        withContext(ioDispatcher) {
+            savedLocationDao.getSavedLocation(ownerUid, locationNormalized)
+        }
 
     /**
      * Creates or updates a saved location.
      */
     suspend fun upsertSavedLocation(savedLocation: SavedLocation) {
-        savedLocationDao.upsert(savedLocation)
+        withContext(ioDispatcher) {
+            savedLocationDao.upsert(savedLocation)
+        }
+    }
+
+    /**
+     * Creates or updates an upload device.
+     */
+    suspend fun upsertUploadDevice(uploadDevice: UploadDevice) {
+        withContext(ioDispatcher) {
+            uploadDeviceDao.upsert(uploadDevice)
+        }
     }
 
     /**
@@ -62,7 +90,9 @@ class StockRepository(
      * @param stockItem The stock item to be inserted.
      */
     suspend fun insert(stockItem: StockItem) {
-        stockItemDao.insert(stockItem)
+        withContext(ioDispatcher) {
+            stockItemDao.insert(stockItem)
+        }
     }
 
     /**
@@ -70,7 +100,9 @@ class StockRepository(
      * @param stockItems The list of stock items to be inserted.
      */
     suspend fun insertAll(stockItems: List<StockItem>) {
-        stockItemDao.insertAll(stockItems)
+        withContext(ioDispatcher) {
+            stockItemDao.insertAll(stockItems)
+        }
     }
 
     /**
@@ -113,38 +145,40 @@ class StockRepository(
         oldSid: String,
         newLocation: String
     ) {
-        val normalizedOldLocation = normalizeLocation(oldLocation)
-        val normalizedNewLocation = normalizeLocation(newLocation)
-        val trimmedNewLocation = newLocation.trim()
+        withContext(ioDispatcher) {
+            val normalizedOldLocation = normalizeLocation(oldLocation)
+            val normalizedNewLocation = normalizeLocation(newLocation)
+            val trimmedNewLocation = newLocation.trim()
 
-        val existingSavedLocation = if (normalizedNewLocation.isBlank()) {
-            null
-        } else {
-            savedLocationDao.getSavedLocation(ownerUid, normalizedNewLocation)
-        }
+            val existingSavedLocation = if (normalizedNewLocation.isBlank()) {
+                null
+            } else {
+                savedLocationDao.getSavedLocation(ownerUid, normalizedNewLocation)
+            }
 
-        val locationLabel = existingSavedLocation?.location ?: trimmedNewLocation
+            val locationLabel = existingSavedLocation?.location ?: trimmedNewLocation
 
-        stockItemDao.updateTableLocation(
-            ownerUid,
-            oldLocation,
-            oldSid,
-            locationLabel
-        )
-
-        if (normalizedNewLocation.isNotBlank()) {
-            savedLocationDao.upsert(
-                SavedLocation(
-                    ownerUid = ownerUid,
-                    locationNormalized = normalizedNewLocation,
-                    location = locationLabel,
-                    sid = oldSid
-                )
+            stockItemDao.updateTableLocation(
+                ownerUid,
+                oldLocation,
+                oldSid,
+                locationLabel
             )
-        }
 
-        if (normalizedOldLocation != normalizedNewLocation) {
-            deleteSavedLocationIfUnused(ownerUid, normalizedOldLocation)
+            if (normalizedNewLocation.isNotBlank()) {
+                savedLocationDao.upsert(
+                    SavedLocation(
+                        ownerUid = ownerUid,
+                        locationNormalized = normalizedNewLocation,
+                        location = locationLabel,
+                        sid = oldSid
+                    )
+                )
+            }
+
+            if (normalizedOldLocation != normalizedNewLocation) {
+                deleteSavedLocationIfUnused(ownerUid, normalizedOldLocation)
+            }
         }
     }
 
@@ -153,30 +187,37 @@ class StockRepository(
         location: String,
         sid: String
     ) {
-        stockItemDao.deleteTableGroup(ownerUid, location, sid)
-        deleteSavedLocationIfUnused(ownerUid, normalizeLocation(location))
+        withContext(ioDispatcher) {
+            stockItemDao.deleteTableGroup(ownerUid, location, sid)
+            deleteSavedLocationIfUnused(ownerUid, normalizeLocation(location))
+        }
     }
 
     suspend fun updateStockItem(
         ownerUid: String,
         stockItem: StockItem
     ) {
-        stockItemDao.updateStockItem(
-            ownerUid = ownerUid,
-            id = stockItem.id,
-            sid = stockItem.sid,
-            identifierKey = stockItem.identifierKey,
-            orderNo = stockItem.orderNo,
-            location = stockItem.location,
-            variableData = stockItem.variableData
-        )
+        withContext(ioDispatcher) {
+            stockItemDao.updateStockItem(
+                ownerUid = ownerUid,
+                id = stockItem.id,
+                sid = stockItem.sid,
+                identifierKey = stockItem.identifierKey,
+                orderNo = stockItem.orderNo,
+                location = stockItem.location,
+                stockName = stockItem.stockName,
+                variableData = stockItem.variableData
+            )
+        }
     }
 
     suspend fun deleteStockItem(
         ownerUid: String,
         stockItemId: String
     ) {
-        stockItemDao.deleteStockItem(ownerUid, stockItemId)
+        withContext(ioDispatcher) {
+            stockItemDao.deleteStockItem(ownerUid, stockItemId)
+        }
     }
 
     suspend fun markItemsUploaded(
@@ -189,7 +230,9 @@ class StockRepository(
             .filter(String::isNotBlank)
             .distinct()
         if (ids.isEmpty()) return
-        stockItemDao.markItemsUploaded(ownerUid, ids, uploadedAt)
+        withContext(ioDispatcher) {
+            stockItemDao.markItemsUploaded(ownerUid, ids, uploadedAt)
+        }
     }
 
     suspend fun uploadInventory(
@@ -200,24 +243,26 @@ class StockRepository(
         stockItems: List<StockItem>,
         onProgress: suspend (current: Int, total: Int) -> Unit = { _, _ -> }
     ): Result<String> {
-        val scopedItems = stockItems.filter { it.ownerUid.isBlank() || it.ownerUid == ownerUid }
-        if (scopedItems.isEmpty()) {
-            return Result.failure(IllegalArgumentException("No stock items found to upload."))
-        }
-        if (apiKey.isBlank()) {
-            return Result.failure(IllegalArgumentException("API key is required for upload."))
-        }
+        return withContext(ioDispatcher) {
+            val scopedItems = stockItems.filter { it.ownerUid.isBlank() || it.ownerUid == ownerUid }
+            if (scopedItems.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("No stock items found to upload."))
+            }
+            if (apiKey.isBlank()) {
+                return@withContext Result.failure(IllegalArgumentException("API key is required for upload."))
+            }
 
-        val urlResult = stockUploadClient.buildUploadUrl(baseUrl, endpointPath)
-        val uploadUrl = urlResult.getOrElse { return Result.failure(it) }
+            val urlResult = stockUploadClient.buildUploadUrl(baseUrl, endpointPath)
+            val uploadUrl = urlResult.getOrElse { return@withContext Result.failure(it) }
 
-        val itemPayload = scopedItems.map { item -> item.toUploadDto(ownerUid) }
-        return stockUploadClient.uploadInventory(
-            uploadUrl = uploadUrl,
-            items = itemPayload,
-            apiKey = apiKey.trim(),
-            onProgress = onProgress
-        )
+            val itemPayload = scopedItems.map { item -> item.toUploadDto(ownerUid) }
+            stockUploadClient.uploadInventory(
+                uploadUrl = uploadUrl,
+                items = itemPayload,
+                apiKey = apiKey.trim(),
+                onProgress = onProgress
+            )
+        }
     }
 
     /**
@@ -225,9 +270,15 @@ class StockRepository(
      * @param uid The unique identifier for the user.
      * @param password The user's password.
      */
-    suspend fun createUser(uid: String, password: String) {
-        val passwordHash = hashPassword(password)
-        userDao.insert(User(uid = uid, passwordHash = passwordHash))
+    suspend fun createUser(uid: String, password: String): Boolean {
+        return withContext(ioDispatcher) {
+            val trimmedUid = uid.trim()
+            if (trimmedUid.isBlank()) return@withContext false
+            if (userDao.userExists(trimmedUid)) return@withContext false
+            val passwordHash = withContext(defaultDispatcher) { hashPassword(password) }
+            userDao.insert(User(uid = trimmedUid, passwordHash = passwordHash))
+            true
+        }
     }
 
     /**
@@ -237,12 +288,16 @@ class StockRepository(
      * @return a boolean indicating whether the login was successful.
      */
     suspend fun loginUser(uid: String, password: String): Boolean {
-        val user = userDao.getUser(uid).firstOrNull()
-        return if (user != null) {
-            val passwordHash = hashPassword(password)
-            user.passwordHash == passwordHash
-        } else {
-            false
+        return withContext(ioDispatcher) {
+            val trimmedUid = uid.trim()
+            if (trimmedUid.isBlank()) return@withContext false
+            val user = userDao.getUserSnapshot(trimmedUid)
+            if (user != null) {
+                val passwordHash = withContext(defaultDispatcher) { hashPassword(password) }
+                user.passwordHash == passwordHash
+            } else {
+                false
+            }
         }
     }
 
@@ -255,7 +310,13 @@ class StockRepository(
         val bytes = password.toByteArray()
         val md = MessageDigest.getInstance("SHA-256")
         val digest = md.digest(bytes)
-        return digest.fold("") { str, it -> str + "%02x".format(it) }
+        val builder = StringBuilder(digest.size * 2)
+        for (byte in digest) {
+            val value = byte.toInt() and 0xFF
+            builder.append(HEX_CHARS[value ushr 4])
+            builder.append(HEX_CHARS[value and 0x0F])
+        }
+        return builder.toString()
     }
 
     private suspend fun deleteSavedLocationIfUnused(ownerUid: String, normalizedLocation: String) {
@@ -270,6 +331,12 @@ class StockRepository(
         return rawLocation.trim().lowercase(Locale.ROOT)
     }
 
+    private companion object {
+        private val HEX_CHARS = charArrayOf(
+            '0', '1', '2', '3', '4', '5', '6', '7',
+            '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
+        )
+    }
 }
 
 private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
@@ -279,6 +346,7 @@ private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
         identifierKey = identifierKey,
         orderNo = orderNo,
         location = location,
+        stockName = stockName,
         dateScanned = dateScanned,
         variableData = variableData,
         ownerUid = ownerUid

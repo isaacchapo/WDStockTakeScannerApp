@@ -1,7 +1,9 @@
 package com.example.stockapp.ui.sharing
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
@@ -403,6 +405,7 @@ private fun normalizeColumnKey(raw: String): String {
 
 private fun buildPdfSchemaKey(fields: Map<String, String>): String {
     return fields.keys
+        .asSequence()
         .map(::normalizeColumnKey)
         .filter { it.isNotBlank() }
         .distinct()
@@ -412,12 +415,24 @@ private fun buildPdfSchemaKey(fields: Map<String, String>): String {
 }
 
 private fun shareFile(context: Context, file: File, mimeType: String) {
-    val uri = FileProvider.getUriForFile(context, "com.example.stockapp.fileprovider", file)
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val shareIntent: Intent = Intent().apply {
         action = Intent.ACTION_SEND
         putExtra(Intent.EXTRA_STREAM, uri)
         type = mimeType
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        clipData = ClipData.newUri(context.contentResolver, "stock-share", uri)
+    }
+    val resolveInfos = context.packageManager.queryIntentActivities(
+        shareIntent,
+        PackageManager.MATCH_DEFAULT_ONLY
+    )
+    resolveInfos.forEach { info ->
+        context.grantUriPermission(
+            info.activityInfo.packageName,
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION
+        )
     }
     context.startActivity(Intent.createChooser(shareIntent, "Share Stock Data"))
 }

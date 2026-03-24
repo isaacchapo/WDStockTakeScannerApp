@@ -40,6 +40,7 @@ interface StockItemDao {
      */
     @Query(
         "SELECT ownerUid, location, sid, " +
+            "COALESCE(MAX(NULLIF(trim(stockName), '')), '') AS stockName, " +
             "COUNT(*) AS totalRecords, " +
             "COUNT(DISTINCT identifierKey) AS schemaCount, " +
             "CASE WHEN COUNT(*) > 0 AND COUNT(*) = SUM(CASE WHEN uploadedAt IS NOT NULL THEN 1 ELSE 0 END) " +
@@ -126,7 +127,7 @@ interface StockItemDao {
     )
 
     @Query(
-        "UPDATE stock_table SET sid = :sid, identifierKey = :identifierKey, orderNo = :orderNo, location = :location, variableData = :variableData " +
+        "UPDATE stock_table SET sid = :sid, identifierKey = :identifierKey, orderNo = :orderNo, location = :location, stockName = :stockName, variableData = :variableData " +
             "WHERE ownerUid = :ownerUid AND id = :id"
     )
     suspend fun updateStockItem(
@@ -136,6 +137,7 @@ interface StockItemDao {
         identifierKey: String,
         orderNo: String?,
         location: String,
+        stockName: String,
         variableData: String
     )
 

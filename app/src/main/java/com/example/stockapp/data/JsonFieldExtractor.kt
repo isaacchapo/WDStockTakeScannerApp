@@ -1,17 +1,26 @@
 package com.example.stockapp.data
 
+import android.util.LruCache
 import org.json.JSONObject
 
 /**
  * Utility to extract fields from JSON stored in StockItem.variableData
  */
 object JsonFieldExtractor {
+    private const val MAX_CACHE_ENTRIES = 200
+    private val cacheLock = Any()
+    private val parsedCache = object : LruCache<String, Map<String, String>>(MAX_CACHE_ENTRIES) {}
     
     /**
      * Extracts all fields from JSON string
      */
     fun extractAllFields(jsonString: String): Map<String, String> {
-        return try {
+        if (jsonString.isBlank()) return emptyMap()
+
+        val cached = synchronized(cacheLock) { parsedCache.get(jsonString) }
+        if (cached != null) return cached
+
+        val parsed = try {
             val json = JSONObject(jsonString)
             val fields = mutableMapOf<String, String>()
             json.keys().forEach { key ->
@@ -22,6 +31,9 @@ object JsonFieldExtractor {
         } catch (e: Exception) {
             emptyMap()
         }
+
+        synchronized(cacheLock) { parsedCache.put(jsonString, parsed) }
+        return parsed
     }
 
     /**

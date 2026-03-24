@@ -8,10 +8,14 @@ import com.example.stockapp.data.QrDataParser
 import com.example.stockapp.data.StockRepository
 import com.example.stockapp.data.local.SavedLocation
 import com.example.stockapp.data.local.StockItem
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.security.SecureRandom
 import java.util.Locale
 
@@ -41,6 +45,7 @@ class CreateStockViewModel(
     private var lastAcceptedRawScan: String = ""
     private var lastAcceptedAtMs: Long = 0L
     private val seenScanFingerprints = linkedSetOf<String>()
+    private val scanMutex = Mutex()
 
     init {
         viewModelScope.launch {
@@ -50,7 +55,19 @@ class CreateStockViewModel(
         }
     }
 
-    fun addScannedItem(barcode: String): ScanAddResult {
+    fun addScannedItem(
+        barcode: String,
+        onResult: (ScanAddResult) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val result = scanMutex.withLock {
+                addScannedItemInternal(barcode)
+            }
+            onResult(result)
+        }
+    }
+
+    private suspend fun addScannedItemInternal(barcode: String): ScanAddResult {
         val cleanedBarcode = barcode.trim()
         Log.d("Scanner", "Processing barcode: '$cleanedBarcode'")
 
@@ -64,7 +81,9 @@ class CreateStockViewModel(
             )
         }
 
-        val parsedData = QrDataParser.parseQrData(cleanedBarcode)
+        val parsedData = withContext(Dispatchers.Default) {
+            QrDataParser.parseQrData(cleanedBarcode)
+        }
         if (parsedData == null) {
             Log.e("Scanner", "Error decoding barcode JSON. Raw data: '$cleanedBarcode'")
             return ScanAddResult(
@@ -73,7 +92,9 @@ class CreateStockViewModel(
             )
         }
 
-        val fingerprint = buildScanFingerprint(parsedData.fields, parsedData.variableData)
+        val fingerprint = withContext(Dispatchers.Default) {
+            buildScanFingerprint(parsedData.fields, parsedData.variableData)
+        }
         if (fingerprint.isNotBlank() && seenScanFingerprints.contains(fingerprint)) {
             Log.d("Scanner", "Ignoring already buffered QR values")
             return ScanAddResult(
@@ -113,12 +134,15 @@ class CreateStockViewModel(
 
     fun confirmScannedItems(
         location: String,
+        stockName: String,
         onComplete: (ConfirmSaveResult) -> Unit = {}
     ) {
         val normalizedLocation = normalizeLocation(location)
+        val trimmedStockName = stockName.trim()
         if (
             ownerUid.isBlank() ||
             normalizedLocation.isBlank() ||
+            trimmedStockName.isBlank() ||
             _isSaving.value
         ) {
             onComplete(ConfirmSaveResult(success = false))
@@ -137,60 +161,73 @@ class CreateStockViewModel(
         viewModelScope.launch {
             _isSaving.value = true
             try {
-                val persistedFingerprints = repository.getAllStockItemsSnapshot(ownerUid)
-                    .mapNotNull { persistedItem ->
-                        buildFingerprintForItem(persistedItem).takeIf { it.isNotBlank() }
+                val persistedItems = repository.getAllStockItemsSnapshot(ownerUid)
+                val savedLocationsSnapshot = _savedLocations.value
+                val prepared = withContext(Dispatchers.Default) {
+                    val persistedFingerprints = persistedItems
+                        .mapNotNull { persistedItem ->
+                            buildFingerprintForItem(persistedItem).takeIf { it.isNotBlank() }
+                        }
+                        .toHashSet()
+                    val existingLocation = savedLocationsSnapshot
+                        .firstOrNull { it.locationNormalized == normalizedLocation }
+                    val sessionSid = existingLocation?.sid
+                        ?.takeIf { it.isNotBlank() }
+                        ?: activeSid
+                    val locationDisplayName = existingLocation?.location ?: location.trim()
+                    val stockNameDisplayName = trimmedStockName
+
+                    val itemsToSave = tempItems.map { item ->
+                        item.copy(
+                            sid = sessionSid,
+                            identifierKey = buildIdentifierKeyFromItem(item),
+                            location = locationDisplayName,
+                            stockName = stockNameDisplayName,
+                            ownerUid = ownerUid
+                        )
                     }
-                    .toHashSet()
-                val existingLocation = _savedLocations.value
-                    .firstOrNull { it.locationNormalized == normalizedLocation }
-                val sessionSid = existingLocation?.sid
-                    ?.takeIf { it.isNotBlank() }
-                    ?: activeSid
-                val locationDisplayName = existingLocation?.location ?: location.trim()
+                    val newItemsToSave = mutableListOf<StockItem>()
+                    var duplicateCount = 0
 
-                val itemsToSave = tempItems.map { item ->
-                    item.copy(
-                        sid = sessionSid,
-                        identifierKey = buildIdentifierKeyFromItem(item),
-                        location = locationDisplayName,
-                        ownerUid = ownerUid
-                    )
-                }
-                val newItemsToSave = mutableListOf<StockItem>()
-                var duplicateCount = 0
-
-                itemsToSave.forEach { item ->
-                    val fingerprint = buildFingerprintForItem(item)
-                    val alreadyExists = fingerprint.isNotBlank() && persistedFingerprints.contains(fingerprint)
-                    if (alreadyExists) {
-                        duplicateCount += 1
-                    } else {
-                        newItemsToSave += item
-                        if (fingerprint.isNotBlank()) {
-                            persistedFingerprints.add(fingerprint)
+                    itemsToSave.forEach { item ->
+                        val fingerprint = buildFingerprintForItem(item)
+                        val alreadyExists = fingerprint.isNotBlank() && persistedFingerprints.contains(fingerprint)
+                        if (alreadyExists) {
+                            duplicateCount += 1
+                        } else {
+                            newItemsToSave += item
+                            if (fingerprint.isNotBlank()) {
+                                persistedFingerprints.add(fingerprint)
+                            }
                         }
                     }
+
+                    PreparedSaveResult(
+                        sessionSid = sessionSid,
+                        locationDisplayName = locationDisplayName,
+                        newItemsToSave = newItemsToSave,
+                        duplicateCount = duplicateCount
+                    )
                 }
 
-                if (newItemsToSave.isNotEmpty()) {
+                if (prepared.newItemsToSave.isNotEmpty()) {
                     repository.upsertSavedLocation(
                         SavedLocation(
                             ownerUid = ownerUid,
                             locationNormalized = normalizedLocation,
-                            location = locationDisplayName,
-                            sid = sessionSid
+                            location = prepared.locationDisplayName,
+                            sid = prepared.sessionSid
                         )
                     )
 
-                    repository.insertAll(newItemsToSave)
+                    repository.insertAll(prepared.newItemsToSave)
                 }
                 resetActiveScanSession()
                 onComplete(
                     ConfirmSaveResult(
                         success = true,
-                        savedCount = newItemsToSave.size,
-                        duplicateCount = duplicateCount
+                        savedCount = prepared.newItemsToSave.size,
+                        duplicateCount = prepared.duplicateCount
                     )
                 )
             } catch (e: Exception) {
@@ -365,6 +402,13 @@ class CreateStockViewModel(
             }
         }
     }
+
+    private data class PreparedSaveResult(
+        val sessionSid: String,
+        val locationDisplayName: String,
+        val newItemsToSave: List<StockItem>,
+        val duplicateCount: Int
+    )
 
     private companion object {
         const val SID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"

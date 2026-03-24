@@ -19,10 +19,16 @@ interface UserDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(user: User)
 
+    @Query("SELECT EXISTS(SELECT 1 FROM user_table WHERE uid = :uid)")
+    suspend fun userExists(uid: String): Boolean
+
     /**
      * @param uid The unique identifier of the user.
      * @return a flow of the user from the table.
      */
     @Query("SELECT * FROM user_table WHERE uid = :uid")
     fun getUser(uid: String): Flow<User?>
+
+    @Query("SELECT * FROM user_table WHERE uid = :uid LIMIT 1")
+    suspend fun getUserSnapshot(uid: String): User?
 }

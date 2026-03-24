@@ -13,6 +13,8 @@ data class StockUploadItemDto(
     val orderNo: String?,
     @SerializedName("location")
     val location: String,
+    @SerializedName("stockName")
+    val stockName: String,
     @SerializedName("dateScanned")
     val dateScanned: Long,
     @SerializedName("variableData")

@@ -14,7 +14,7 @@ object StockAppColors {
     val TextSecondary = Color(0xFF94A3B8)
     val TextMuted = Color(0xFF64748B)
 
-    val CardSurface = Color(0xCC0F172A)
+    val CardSurface = Color(0xFF0F172A)
     val CardBorder = Color(0x4094A3B8)
 
     val FieldSurface = Color(0xB30F172A)
