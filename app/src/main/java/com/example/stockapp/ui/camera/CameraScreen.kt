@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.example.stockapp.ui.common.StockAppColors
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -142,7 +143,7 @@ fun CameraScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(48.dp) // Adjust padding to change the size of the guide
-                .border(3.dp, Color.Green, RoundedCornerShape(12.dp))
+                .border(3.dp, StockAppColors.AccentCyan, RoundedCornerShape(12.dp))
         )
     }
 

@@ -25,8 +25,8 @@ fun GlowBackground(
         val width = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val height = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val minDim = min(width, height)
-        val glowPrimary = Color.Black.copy(alpha = 0.18f)
-        val glowSecondary = Color.Black.copy(alpha = 0.12f)
+        val glowPrimary = StockAppColors.SoftGlowCyan.copy(alpha = 0.32f)
+        val glowSecondary = StockAppColors.SoftGlowAmber.copy(alpha = 0.24f)
 
         Box(
             modifier = Modifier

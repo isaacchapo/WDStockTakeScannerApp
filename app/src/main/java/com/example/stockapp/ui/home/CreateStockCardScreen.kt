@@ -1,18 +1,15 @@
 package com.example.stockapp.ui.home
 
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.ContextWrapper
 import android.os.Build
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.util.Log
 import android.view.View
-import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.Toast
@@ -20,6 +17,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,10 +61,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,9 +93,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.stockapp.StockApplication
 import com.example.stockapp.data.QrDataParser
 import com.example.stockapp.data.local.SavedLocation
+import com.example.stockapp.ui.common.StockAppBackground
+import com.example.stockapp.ui.common.ScreenAppear
+import com.example.stockapp.ui.common.StockAppColors
+import com.example.stockapp.ui.common.stockOutlinedTextFieldColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val SCAN_BROADCAST_ACTIONS = listOf(
     "android.intent.ACTION_DECODE_DATA",
@@ -134,6 +142,8 @@ private val SCAN_DATA_EXTRA_KEYS = listOf(
     Intent.EXTRA_TEXT
 )
 
+private val DEFAULT_PREVIEW_COLUMNS = listOf("FIELD1", "FIELD2", "FIELD3", "FIELD4")
+
 // Intent actions to trigger hardware scanners on various industrial devices
 private const val ACTION_SCANNER_SOFT_TRIGGER = "com.android.serial.BARCODE_READ_ACTION"
 private const val ACTION_SCANNER_START = "com.android.scanner.ENABLED" // Generic/Handheld
@@ -164,9 +174,11 @@ fun CreateStockCardScreen(
     var selectedScannedItemId by remember { mutableStateOf<String?>(null) }
     var showEndSessionPrompt by remember { mutableStateOf(false) }
     var showExitSessionPrompt by remember { mutableStateOf(false) }
-    var tableTopInRoot by remember { mutableStateOf(0f) }
-    var tableLeftInRoot by remember { mutableStateOf(0f) }
-    var tableWidthPx by remember { mutableStateOf(0) }
+    var showStockNamePrompt by remember { mutableStateOf(false) }
+    var stockNameDraft by remember { mutableStateOf("") }
+    var tableTopInRoot by remember { mutableFloatStateOf(0f) }
+    var tableLeftInRoot by remember { mutableFloatStateOf(0f) }
+    var tableWidthPx by remember { mutableIntStateOf(0) }
     var selectedRowTopPx by remember { mutableStateOf<Int?>(null) }
     var selectedRowLeftPx by remember { mutableStateOf<Int?>(null) }
     var selectedRowWidthPx by remember { mutableStateOf<Int?>(null) }
@@ -175,23 +187,36 @@ fun CreateStockCardScreen(
     val currentSid by createStockViewModel.currentSid.collectAsState()
     val savedLocations by createStockViewModel.savedLocations.collectAsState()
     val isSaving by createStockViewModel.isSaving.collectAsState()
-    val selectedScannedItem = scannedItems.firstOrNull { it.id == selectedScannedItemId }
+    val selectedScannedItemState = remember {
+        derivedStateOf { scannedItems.firstOrNull { it.id == selectedScannedItemId } }
+    }
+    val selectedScannedItem = selectedScannedItemState.value
     val density = LocalDensity.current
     val overlayWidthPx = with(density) { 236.dp.roundToPx() }
     val overlayVerticalShiftPx = with(density) { 4.dp.roundToPx() }
 
     var location by remember { mutableStateOf("") }
     val actionButtonWidth = 126.dp
-    val normalizedLocationInput = location.trim().lowercase(Locale.ROOT)
-    val displaySid = savedLocations
-        .firstOrNull { it.locationNormalized == normalizedLocationInput }
-        ?.sid
-        ?.takeIf { it.isNotBlank() }
-        ?: currentSid
+    val normalizedLocationInput by remember {
+        derivedStateOf { location.trim().lowercase(Locale.ROOT) }
+    }
+    val displaySid by remember {
+        derivedStateOf {
+            savedLocations
+                .firstOrNull { it.locationNormalized == normalizedLocationInput }
+                ?.sid
+                ?.takeIf { it.isNotBlank() }
+                ?: currentSid
+        }
+    }
 
-    val canConfirm = scannedItems.isNotEmpty() &&
-        location.isNotBlank() &&
-        !isSaving
+    val canConfirm by remember {
+        derivedStateOf {
+            scannedItems.isNotEmpty() &&
+                location.isNotBlank() &&
+                !isSaving
+        }
+    }
 
     val statusText = when {
         isScanning && isPaused -> "Paused"
@@ -210,38 +235,23 @@ fun CreateStockCardScreen(
     BackHandler {
         when {
             showAddLocationForm -> showAddLocationForm = false
+            showStockNamePrompt -> showStockNamePrompt = false
             showExitSessionPrompt -> showExitSessionPrompt = false
             else -> requestExitNavigation()
         }
     }
 
-    DisposableEffect(context) {
-        val activity = context.findActivity()
-        val window = activity?.window
-        val previousSoftInputMode = window?.attributes?.softInputMode
-
-        if (window != null) {
-            val preservedState = (previousSoftInputMode ?: 0) and WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE
-            window.setSoftInputMode(preservedState or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
-        }
-
-        onDispose {
-            if (window != null && previousSoftInputMode != null) {
-                window.setSoftInputMode(previousSoftInputMode)
-            }
-        }
-    }
-
     fun applyScanResult(rawValue: String) {
-        val result = createStockViewModel.addScannedItem(rawValue)
-        if (!result.accepted) {
-            val message = if (result.message?.contains("duplicate", ignoreCase = true) == true) {
-                "Duplicate not allowed"
-            } else {
-                result.message
-            }
-            if (!message.isNullOrBlank()) {
-                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        createStockViewModel.addScannedItem(rawValue) { result ->
+            if (!result.accepted) {
+                val message = if (result.message?.contains("duplicate", ignoreCase = true) == true) {
+                    "Duplicate not allowed"
+                } else {
+                    result.message
+                }
+                if (!message.isNullOrBlank()) {
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -289,108 +299,116 @@ fun CreateStockCardScreen(
         }
     )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF4F7FA))
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            CreateStockTopBar(onBack = { requestExitNavigation() })
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+    StockAppBackground {
+        ScreenAppear {
+            Box(
+                modifier = Modifier.fillMaxSize()
             ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            StatusIndicator(statusText = statusText)
-                            if (isTopCardCollapsed) {
-                                Text(
-                                    text = "LOC:${location.ifBlank { "-" }}  UID:$loggedInUser  SID:$displaySid",
-                                    color = Color(0xFF4F6787),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            } else {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    SessionChip(label = "UID", value = loggedInUser)
-                                    SessionChip(label = "SID", value = displaySid)
-                                }
-                            }
-                            IconButton(
-                                onClick = {
-                                    isTopCardCollapsed = !isTopCardCollapsed
-                                    if (isTopCardCollapsed) {
-                                        showSavedLocations = false
-                                    }
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isTopCardCollapsed) {
-                                        Icons.Filled.ExpandMore
-                                    } else {
-                                        Icons.Filled.ExpandLess
-                                    },
-                                    contentDescription = "Toggle card",
-                                    tint = Color(0xFF0A4A99)
-                                )
-                            }
-                        }
+                Column(modifier = Modifier.fillMaxSize()) {
+                    CreateStockTopBar(onBack = { requestExitNavigation() })
 
-                        if (!isTopCardCollapsed) {
-                            LocationEntryCard(
-                                location = location,
-                                onLocationChange = { location = it },
-                                savedLocations = savedLocations,
-                                locationsExpanded = showSavedLocations,
-                                onToggleLocations = { showSavedLocations = !showSavedLocations },
-                                onDismissLocations = { showSavedLocations = false },
-                                onOpenAddLocationForm = {
-                                    addLocationDraft = location
-                                    showAddLocationForm = true
-                                },
-                                onSelectLocation = { selected ->
-                                    location = selected
-                                    showSavedLocations = false
-                                },
-                                enabled = !isSaving
-                            )
-                        }
-                    }
-                }
-
-                Card(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        .weight(1f)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    val previewColumns = remember(scannedItems) {
-                        resolvePreviewColumns(scannedItems)
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(14.dp)),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                StatusIndicator(statusText = statusText)
+                                if (isTopCardCollapsed) {
+                                    Text(
+                                        text = "LOC:${location.ifBlank { "-" }}  UID:$loggedInUser  SID:$displaySid",
+                                        color = StockAppColors.TextSecondary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                } else {
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        SessionChip(label = "UID", value = loggedInUser)
+                                        SessionChip(label = "SID", value = displaySid)
+                                    }
+                                }
+                                IconButton(
+                                    onClick = {
+                                        isTopCardCollapsed = !isTopCardCollapsed
+                                        if (isTopCardCollapsed) {
+                                            showSavedLocations = false
+                                        }
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isTopCardCollapsed) {
+                                            Icons.Filled.ExpandMore
+                                        } else {
+                                            Icons.Filled.ExpandLess
+                                        },
+                                        contentDescription = "Toggle card",
+                                        tint = StockAppColors.AccentCyan
+                                    )
+                                }
+                            }
+
+                            if (!isTopCardCollapsed) {
+                                LocationEntryCard(
+                                    location = location,
+                                    onLocationChange = { location = it },
+                                    savedLocations = savedLocations,
+                                    locationsExpanded = showSavedLocations,
+                                    onToggleLocations = { showSavedLocations = !showSavedLocations },
+                                    onDismissLocations = { showSavedLocations = false },
+                                    onOpenAddLocationForm = {
+                                        addLocationDraft = ""
+                                        showAddLocationForm = true
+                                    },
+                                    onSelectLocation = { selected ->
+                                        location = selected
+                                        showSavedLocations = false
+                                    },
+                                    enabled = !isSaving
+                                )
+                            }
+                        }
                     }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(14.dp)),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        val previewColumns by produceState(
+                            initialValue = DEFAULT_PREVIEW_COLUMNS,
+                            scannedItems
+                        ) {
+                            value = withContext(Dispatchers.Default) {
+                                resolvePreviewColumns(scannedItems)
+                            }
+                        }
 
                     Box(
                         modifier = Modifier
@@ -408,7 +426,11 @@ fun CreateStockCardScreen(
                         ) {
                             val startStopLabel = if (isScanning) "End" else "Start"
                             val startStopIcon = if (isScanning) Icons.Filled.Stop else Icons.Filled.QrCodeScanner
-                            val startStopColor = if (isScanning) Color(0xFFC62828) else Color(0xFF1565C0)
+                            val startStopColor = if (isScanning) {
+                                StockAppColors.AccentAmber
+                            } else {
+                                StockAppColors.AccentCyan
+                            }
 
                             Column(
                                 modifier = Modifier
@@ -439,29 +461,37 @@ fun CreateStockCardScreen(
                                         .height(36.dp),
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = Color(0xFFF8FBFF),
-                                        disabledContainerColor = Color(0xFFF1F5FA),
+                                        containerColor = StockAppColors.CardSurface,
+                                        disabledContainerColor = StockAppColors.DisabledSurface,
                                         contentColor = startStopColor,
-                                        disabledContentColor = Color(0xFF90A4AE)
+                                        disabledContentColor = StockAppColors.DisabledText
                                     )
                                 ) {
                                     Icon(
                                         imageVector = startStopIcon,
                                         contentDescription = null,
                                         modifier = Modifier.size(14.dp),
-                                        tint = if (isScanning || !isDeviceScannerBusy) startStopColor else Color(0xFF90A4AE)
+                                        tint = if (isScanning || !isDeviceScannerBusy) {
+                                            startStopColor
+                                        } else {
+                                            StockAppColors.DisabledText
+                                        }
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = startStopLabel,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = if (isScanning || !isDeviceScannerBusy) startStopColor else Color(0xFF90A4AE)
+                                        color = if (isScanning || !isDeviceScannerBusy) {
+                                            startStopColor
+                                        } else {
+                                            StockAppColors.DisabledText
+                                        }
                                     )
                                 }
                                 Text(
                                     text = "Scanned Items",
-                                    color = Color(0xFF5F7390),
+                                    color = StockAppColors.TextSecondary,
                                     fontWeight = FontWeight.Medium,
                                     fontSize = 10.sp,
                                     textAlign = TextAlign.Center
@@ -471,14 +501,14 @@ fun CreateStockCardScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color(0xFF0A4A99), RoundedCornerShape(8.dp))
+                                    .background(StockAppColors.NavyMid, RoundedCornerShape(8.dp))
                                     .padding(horizontal = 8.dp, vertical = 8.dp)
                             ) {
-                                Text("No", modifier = Modifier.weight(0.3f), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text(previewColumns[0], modifier = Modifier.weight(1f), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text(previewColumns[1], modifier = Modifier.weight(1f), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text(previewColumns[2], modifier = Modifier.weight(1f), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text(previewColumns[3], modifier = Modifier.weight(1f), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.End)
+                                Text("No", modifier = Modifier.weight(0.3f), color = StockAppColors.TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(previewColumns[0], modifier = Modifier.weight(1f), color = StockAppColors.TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(previewColumns[1], modifier = Modifier.weight(1f), color = StockAppColors.TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(previewColumns[2], modifier = Modifier.weight(1f), color = StockAppColors.TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(previewColumns[3], modifier = Modifier.weight(1f), color = StockAppColors.TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.End)
                             }
 
                             if (scannedItems.isEmpty()) {
@@ -491,7 +521,7 @@ fun CreateStockCardScreen(
                                 ) {
                                     Text(
                                         text = "No QR scans yet. Pull trigger after starting scan.",
-                                        color = Color(0xFF607D8B),
+                                        color = StockAppColors.TextSecondary,
                                         fontSize = 12.sp
                                     )
                                 }
@@ -503,10 +533,23 @@ fun CreateStockCardScreen(
                                         .padding(top = 6.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    itemsIndexed(scannedItems) { index, item ->
+                                    itemsIndexed(
+                                        items = scannedItems,
+                                        key = { _, item -> item.id }
+                                    ) { index, item ->
                                         val isSelected = selectedScannedItemId == item.id
                                         val itemFields = remember(item.variableData) {
                                             com.example.stockapp.data.JsonFieldExtractor.extractAllFields(item.variableData)
+                                        }
+                                        val positionModifier = if (isSelected) {
+                                            Modifier.onGloballyPositioned { coordinates ->
+                                                val rowPosition = coordinates.positionInRoot()
+                                                selectedRowTopPx = (rowPosition.y - tableTopInRoot).toInt()
+                                                selectedRowLeftPx = (rowPosition.x - tableLeftInRoot).toInt()
+                                                selectedRowWidthPx = coordinates.size.width
+                                            }
+                                        } else {
+                                            Modifier
                                         }
                                         Column(
                                             modifier = Modifier
@@ -514,24 +557,21 @@ fun CreateStockCardScreen(
                                                 .clip(RoundedCornerShape(8.dp))
                                                 .background(
                                                     when {
-                                                        isSelected -> Color(0xFFE3F2FD)
-                                                        index % 2 == 0 -> Color(0xFFF8FBFF)
-                                                        else -> Color.White
+                                                        isSelected -> StockAppColors.AccentCyan.copy(alpha = 0.22f)
+                                                        index % 2 == 0 -> StockAppColors.CardSurface
+                                                        else -> StockAppColors.FieldSurface
                                                     }
                                                 )
                                                 .border(
                                                     1.dp,
-                                                    if (isSelected) Color(0xFF90CAF9) else Color(0xFFE2E8F0),
+                                                    if (isSelected) {
+                                                        StockAppColors.AccentCyan.copy(alpha = 0.65f)
+                                                    } else {
+                                                        StockAppColors.CardBorder
+                                                    },
                                                     RoundedCornerShape(8.dp)
                                                 )
-                                                .onGloballyPositioned { coordinates ->
-                                                    if (isSelected) {
-                                                        val rowPosition = coordinates.positionInRoot()
-                                                        selectedRowTopPx = (rowPosition.y - tableTopInRoot).toInt()
-                                                        selectedRowLeftPx = (rowPosition.x - tableLeftInRoot).toInt()
-                                                        selectedRowWidthPx = coordinates.size.width
-                                                    }
-                                                }
+                                                .then(positionModifier)
                                                 .clickable {
                                                     selectedScannedItemId = if (isSelected) {
                                                         selectedRowTopPx = null
@@ -546,15 +586,44 @@ fun CreateStockCardScreen(
                                             verticalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
                                             Row(modifier = Modifier.fillMaxWidth()) {
-                                                Text("${index + 1}", modifier = Modifier.weight(0.3f), fontSize = 11.sp)
-                                                Text(resolvePreviewValue(itemFields, previewColumns[0]), modifier = Modifier.weight(1f), fontSize = 11.sp)
-                                                Text(resolvePreviewValue(itemFields, previewColumns[1]), modifier = Modifier.weight(1f), fontSize = 11.sp)
-                                                Text(resolvePreviewValue(itemFields, previewColumns[2]), modifier = Modifier.weight(1f), fontSize = 11.sp)
-                                                Text(resolvePreviewValue(itemFields, previewColumns[3]), modifier = Modifier.weight(1f), fontSize = 11.sp, textAlign = TextAlign.End)
+                                                Text(
+                                                    "${index + 1}",
+                                                    modifier = Modifier.weight(0.3f),
+                                                    fontSize = 11.sp,
+                                                    color = StockAppColors.TextPrimary
+                                                )
+                                                Text(
+                                                    resolvePreviewValue(itemFields, previewColumns[0]),
+                                                    modifier = Modifier.weight(1f),
+                                                    fontSize = 11.sp,
+                                                    color = StockAppColors.TextPrimary
+                                                )
+                                                Text(
+                                                    resolvePreviewValue(itemFields, previewColumns[1]),
+                                                    modifier = Modifier.weight(1f),
+                                                    fontSize = 11.sp,
+                                                    color = StockAppColors.TextPrimary
+                                                )
+                                                Text(
+                                                    resolvePreviewValue(itemFields, previewColumns[2]),
+                                                    modifier = Modifier.weight(1f),
+                                                    fontSize = 11.sp,
+                                                    color = StockAppColors.TextPrimary
+                                                )
+                                                Text(
+                                                    resolvePreviewValue(itemFields, previewColumns[3]),
+                                                    modifier = Modifier.weight(1f),
+                                                    fontSize = 11.sp,
+                                                    textAlign = TextAlign.End,
+                                                    color = StockAppColors.TextPrimary
+                                                )
+                                            }
+                                            val scannedAtLabel = remember(item.dateScanned) {
+                                                formatRecordTimestamp(item.dateScanned)
                                             }
                                             Text(
-                                                text = "Scanned: ${formatRecordTimestamp(item.dateScanned)}",
-                                                color = Color(0xFF607D8B),
+                                                text = "Scanned: $scannedAtLabel",
+                                                color = StockAppColors.TextSecondary,
                                                 fontSize = 10.sp
                                             )
                                         }
@@ -567,12 +636,12 @@ fun CreateStockCardScreen(
                                     .fillMaxWidth()
                                     .padding(top = 8.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFFEAF2FF))
+                                    .background(StockAppColors.FieldSurface)
                                     .padding(horizontal = 10.dp, vertical = 8.dp)
                             ) {
                                 Text(
                                     text = "Total:${scannedItems.size}",
-                                    color = Color(0xFF0A4A99),
+                                    color = StockAppColors.AccentCyan,
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 12.sp
                                 )
@@ -618,84 +687,108 @@ fun CreateStockCardScreen(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val pauseResumeLabel = if (isPaused) "Resume" else "Pause"
-                    val pauseResumeIcon = if (isPaused) Icons.Filled.PlayCircle else Icons.Filled.PauseCircle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val pauseResumeLabel = if (isPaused) "Resume" else "Pause"
+                        val pauseResumeIcon = if (isPaused) Icons.Filled.PlayCircle else Icons.Filled.PauseCircle
 
-                    TightActionButton(
-                        text = pauseResumeLabel,
-                        icon = pauseResumeIcon,
-                        onClick = {
-                            if (!isScanning) return@TightActionButton
-                            isTopCardCollapsed = true
-                            showSavedLocations = false
-                            if (isPaused) {
-                                isPaused = false
-                                startDeviceScanner()
-                            } else {
-                                isPaused = true
-                            }
-                        },
-                        enabled = isScanning && (!isPaused || !isDeviceScannerBusy),
-                        accentColor = Color(0xFF455A64),
-                        modifier = Modifier.width(actionButtonWidth)
-                    )
-
-                    Spacer(modifier = Modifier.width(10.dp))
-
-                    TightActionButton(
-                        text = if (isSaving) "Saving..." else "Confirm",
-                        icon = Icons.Filled.CheckCircle,
-                        onClick = {
-                            if (!canConfirm) return@TightActionButton
-                            createStockViewModel.confirmScannedItems(location) { result ->
-                                val msg = when {
-                                    !result.success -> "Save failed."
-                                    result.duplicateCount > 0 -> "Stock items already exists"
-                                    else -> "Inventory saved successfully!"
+                        TightActionButton(
+                            text = pauseResumeLabel,
+                            icon = pauseResumeIcon,
+                            onClick = {
+                                if (!isScanning) return@TightActionButton
+                                isTopCardCollapsed = true
+                                showSavedLocations = false
+                                if (isPaused) {
+                                    isPaused = false
+                                    startDeviceScanner()
+                                } else {
+                                    isPaused = true
                                 }
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                if (result.success) {
-                                    selectedScannedItemId = null
-                                    selectedRowTopPx = null
-                                    selectedRowLeftPx = null
-                                    selectedRowWidthPx = null
-                                }
-                            }
-                        },
-                        enabled = canConfirm,
-                        accentColor = Color(0xFF2E7D32),
-                        modifier = Modifier.width(actionButtonWidth)
-                    )
+                            },
+                            enabled = isScanning && (!isPaused || !isDeviceScannerBusy),
+                            accentColor = StockAppColors.AccentAmber,
+                            modifier = Modifier.width(actionButtonWidth)
+                        )
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        TightActionButton(
+                            text = if (isSaving) "Saving..." else "Confirm",
+                            icon = Icons.Filled.CheckCircle,
+                            onClick = {
+                                if (!canConfirm) return@TightActionButton
+                                stockNameDraft = ""
+                                showStockNamePrompt = true
+                            },
+                            enabled = canConfirm,
+                            accentColor = StockAppColors.AccentCyan,
+                            modifier = Modifier.width(actionButtonWidth)
+                        )
+                    }
                 }
             }
         }
     }
 
+    if (showStockNamePrompt) {
+        StockNamePrompt(
+            stockName = stockNameDraft,
+            isSaving = isSaving,
+            onStockNameChange = { stockNameDraft = it },
+            onConfirm = {
+                val trimmedStockName = stockNameDraft.trim()
+                if (trimmedStockName.isBlank()) {
+                    Toast.makeText(context, "Enter stock name", Toast.LENGTH_SHORT).show()
+                    return@StockNamePrompt
+                }
+                showStockNamePrompt = false
+                createStockViewModel.confirmScannedItems(location, trimmedStockName) { result ->
+                    val msg = when {
+                        !result.success -> "Save failed."
+                        result.duplicateCount > 0 -> "Stock items already exists"
+                        else -> "Inventory saved successfully!"
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    if (result.success) {
+                        stockNameDraft = ""
+                        selectedScannedItemId = null
+                        selectedRowTopPx = null
+                        selectedRowLeftPx = null
+                        selectedRowWidthPx = null
+                    }
+                }
+            }
+        )
+    }
+
     if (showAddLocationForm) {
         AlertDialog(
             onDismissRequest = {
+                addLocationDraft = ""
                 showAddLocationForm = false
             },
-            title = { Text("Add Location") },
+            title = { Text("Add Location", color = StockAppColors.TextPrimary) },
             text = {
                 OutlinedTextField(
                     value = addLocationDraft,
                     onValueChange = { addLocationDraft = it },
                     singleLine = true,
-                    label = { Text("Location") }
+                    label = { Text("Location") },
+                    colors = stockOutlinedTextFieldColors()
                 )
             },
             confirmButton = {
                 OutlinedButton(
                     onClick = {
-                        createStockViewModel.addLocation(addLocationDraft) { success ->
+                        val newLocation = addLocationDraft.trim()
+                        createStockViewModel.addLocation(newLocation) { success ->
                             if (success) {
-                                location = addLocationDraft.trim()
+                                location = newLocation
+                                addLocationDraft = ""
                                 showAddLocationForm = false
                                 Toast.makeText(context, "Location added.", Toast.LENGTH_SHORT).show()
                             } else {
@@ -703,7 +796,13 @@ fun CreateStockCardScreen(
                             }
                         }
                     },
-                    shape = RoundedCornerShape(10.dp)
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = StockAppColors.CardSurface,
+                        contentColor = StockAppColors.AccentCyan,
+                        disabledContainerColor = StockAppColors.DisabledSurface,
+                        disabledContentColor = StockAppColors.DisabledText
+                    )
                 ) {
                     Text("Add")
                 }
@@ -711,13 +810,23 @@ fun CreateStockCardScreen(
             dismissButton = {
                 OutlinedButton(
                     onClick = {
+                        addLocationDraft = ""
                         showAddLocationForm = false
                     },
-                    shape = RoundedCornerShape(10.dp)
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = StockAppColors.CardSurface,
+                        contentColor = StockAppColors.TextSecondary,
+                        disabledContainerColor = StockAppColors.DisabledSurface,
+                        disabledContentColor = StockAppColors.DisabledText
+                    )
                 ) {
                     Text("Cancel")
                 }
-            }
+            },
+            containerColor = StockAppColors.CardSurface,
+            titleContentColor = StockAppColors.TextPrimary,
+            textContentColor = StockAppColors.TextSecondary
         )
     }
 
@@ -727,11 +836,13 @@ fun CreateStockCardScreen(
             text = {
                 Text(
                     text = "Do you want to end this stock take session?",
-                    color = Color(0xFF102A43),
+                    color = StockAppColors.TextPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             },
+            containerColor = StockAppColors.CardSurface,
+            textContentColor = StockAppColors.TextSecondary,
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -743,7 +854,7 @@ fun CreateStockCardScreen(
                 ) {
                     Text(
                         text = "Yes",
-                        color = Color(0xFF0A4A99),
+                        color = StockAppColors.AccentCyan,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -754,7 +865,7 @@ fun CreateStockCardScreen(
                 ) {
                     Text(
                         text = "No",
-                        color = Color(0xFF546E7A),
+                        color = StockAppColors.TextSecondary,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -766,7 +877,7 @@ fun CreateStockCardScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.28f)),
+                .background(StockAppColors.Veil),
             contentAlignment = Alignment.Center
         ) {
             Card(
@@ -774,8 +885,8 @@ fun CreateStockCardScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 28.dp),
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -785,7 +896,7 @@ fun CreateStockCardScreen(
                 ) {
                     Text(
                         text = "Do you want to proceed with this action? It will cancel the current stock take session",
-                        color = Color(0xFF102A43),
+                        color = StockAppColors.TextPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -798,7 +909,7 @@ fun CreateStockCardScreen(
                         ) {
                             Text(
                                 text = "No",
-                                color = Color(0xFF546E7A),
+                                color = StockAppColors.TextSecondary,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -820,13 +931,14 @@ fun CreateStockCardScreen(
                         ) {
                             Text(
                                 text = "Proceed",
-                                color = Color(0xFF0A4A99),
+                                color = StockAppColors.AccentAmber,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -847,24 +959,24 @@ private fun TightActionButton(
         modifier = modifier.height(42.dp),
         shape = RoundedCornerShape(10.dp),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = Color(0xFFF8FBFF),
-            disabledContainerColor = Color(0xFFF1F5FA),
+            containerColor = StockAppColors.CardSurface,
+            disabledContainerColor = StockAppColors.DisabledSurface,
             contentColor = accentColor,
-            disabledContentColor = Color(0xFF90A4AE)
+            disabledContentColor = StockAppColors.DisabledText
         )
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(16.dp),
-            tint = if (enabled) accentColor else Color(0xFF90A4AE)
+            tint = if (enabled) accentColor else StockAppColors.DisabledText
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = text,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (enabled) accentColor else Color(0xFF90A4AE),
+            color = if (enabled) accentColor else StockAppColors.DisabledText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -880,19 +992,19 @@ private fun DeleteRecordOverlayPrompt(
     Card(
         modifier = modifier.width(236.dp),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFEFF)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, Color(0xFFD8E5F7), RoundedCornerShape(12.dp))
+                .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(12.dp))
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 text = "Do you want to delete the record?",
-                color = Color(0xFF102A43),
+                color = StockAppColors.TextPrimary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -908,7 +1020,7 @@ private fun DeleteRecordOverlayPrompt(
                         text = "No",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF546E7A)
+                        color = StockAppColors.TextSecondary
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
@@ -920,9 +1032,69 @@ private fun DeleteRecordOverlayPrompt(
                         text = "Yes",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF0A4A99)
+                        color = StockAppColors.AccentAmber
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StockNamePrompt(
+    stockName: String,
+    isSaving: Boolean,
+    onStockNameChange: (String) -> Unit,
+    onConfirm: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(StockAppColors.Veil)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) { },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp)
+                .background(StockAppColors.CardSurface, RoundedCornerShape(12.dp))
+                .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Enter stock name",
+                color = StockAppColors.TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            OutlinedTextField(
+                value = stockName,
+                onValueChange = onStockNameChange,
+                singleLine = true,
+                enabled = !isSaving,
+                placeholder = { Text("Enter stock name") },
+                modifier = Modifier.fillMaxWidth(),
+                colors = stockOutlinedTextFieldColors()
+            )
+            OutlinedButton(
+                onClick = onConfirm,
+                enabled = stockName.trim().isNotBlank() && !isSaving,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = StockAppColors.CardSurface,
+                    contentColor = StockAppColors.AccentCyan,
+                    disabledContainerColor = StockAppColors.DisabledSurface,
+                    disabledContentColor = StockAppColors.DisabledText
+                )
+            ) {
+                Text("Confirm")
             }
         }
     }
@@ -944,14 +1116,14 @@ private fun LocationEntryCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFF8FBFF))
-            .border(1.dp, Color(0xFFD8E5F7), RoundedCornerShape(12.dp))
+            .background(StockAppColors.FieldSurface)
+            .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(12.dp))
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             text = "Location",
-            color = Color(0xFF0A4A99),
+            color = StockAppColors.AccentCyan,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold
         )
@@ -961,8 +1133,8 @@ private fun LocationEntryCard(
                 .fillMaxWidth()
                 .height(42.dp)
                 .clip(RoundedCornerShape(50))
-                .background(if (enabled) Color.White else Color(0xFFEEF2F7))
-                .border(1.dp, Color(0xFFC7D3E3), RoundedCornerShape(50))
+                .background(if (enabled) StockAppColors.FieldSurface else StockAppColors.DisabledSurface)
+                .border(1.dp, StockAppColors.FieldBorder, RoundedCornerShape(50))
                 .padding(start = 12.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -974,13 +1146,13 @@ private fun LocationEntryCard(
                 modifier = Modifier.weight(1f),
                 textStyle = TextStyle(
                     fontSize = 14.sp,
-                    color = if (enabled) Color(0xFF102A43) else Color(0xFF7B8794)
+                    color = if (enabled) StockAppColors.TextPrimary else StockAppColors.DisabledText
                 ),
                 decorationBox = { innerTextField ->
                     if (location.isBlank()) {
                         Text(
                             text = "Enter location",
-                            color = Color(0xFF9AA5B1),
+                            color = StockAppColors.TextSecondary,
                             fontSize = 14.sp
                         )
                     }
@@ -996,7 +1168,7 @@ private fun LocationEntryCard(
                 Icon(
                     imageVector = Icons.Filled.Add,
                     contentDescription = "Add location",
-                    tint = Color(0xFF0A4A99),
+                    tint = StockAppColors.AccentCyan,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -1010,7 +1182,7 @@ private fun LocationEntryCard(
                     Icon(
                         imageVector = if (locationsExpanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
                         contentDescription = "Toggle saved locations",
-                        tint = Color(0xFF0A4A99),
+                        tint = StockAppColors.AccentCyan,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -1021,7 +1193,7 @@ private fun LocationEntryCard(
                     if (savedLocations.isEmpty()) {
                         Text(
                             text = "No saved locations",
-                            color = Color(0xFF7B8794),
+                            color = StockAppColors.TextSecondary,
                             fontSize = 11.sp,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
@@ -1054,15 +1226,15 @@ private fun SmallLocationOverlayCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .height(22.dp)
-            .background(Color(0xFFF8FBFF))
-            .border(1.dp, Color(0xFFDDE7F2), RoundedCornerShape(10.dp))
+            .background(StockAppColors.CardSurface)
+            .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Text(
             text = label,
-            color = Color(0xFF102A43),
+            color = StockAppColors.TextPrimary,
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium
         )
@@ -1074,20 +1246,20 @@ private fun SessionChip(label: String, value: String) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xFFEAF2FF))
+            .background(StockAppColors.AccentCyan.copy(alpha = 0.18f))
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = "$label:",
-            color = Color(0xFF4F6787),
+            color = StockAppColors.TextSecondary,
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
             text = value.ifBlank { "-" },
-            color = Color(0xFF0A4A99),
+            color = StockAppColors.AccentCyan,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold
         )
@@ -1097,9 +1269,9 @@ private fun SessionChip(label: String, value: String) {
 @Composable
 private fun StatusIndicator(statusText: String) {
     val (bgColor, textColor) = when (statusText) {
-        "Scanning" -> Color(0xFFE8F5E9) to Color(0xFF2E7D32)
-        "Paused" -> Color(0xFFFFF3E0) to Color(0xFFE65100)
-        else -> Color(0xFFE3F2FD) to Color(0xFF1565C0)
+        "Scanning" -> StockAppColors.AccentCyan.copy(alpha = 0.2f) to StockAppColors.AccentCyan
+        "Paused" -> StockAppColors.AccentAmber.copy(alpha = 0.2f) to StockAppColors.AccentAmber
+        else -> StockAppColors.AccentCyan.copy(alpha = 0.12f) to StockAppColors.AccentCyan
     }
 
     Box(
@@ -1130,12 +1302,12 @@ private fun CreateStockTopBar(onBack: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF1565C0))
+            .background(StockAppColors.NavyMid)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(
             text = "STOCK TAKE",
-            color = Color.White,
+            color = StockAppColors.TextPrimary,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 1.sp,
@@ -1146,13 +1318,13 @@ private fun CreateStockTopBar(onBack: () -> Unit) {
             onClick = onBack,
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                .background(StockAppColors.AccentCyan.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
                 .size(34.dp)
         ) {
             Icon(
                 imageVector = Icons.Filled.ArrowBack,
                 contentDescription = "Back",
-                tint = Color.White,
+                tint = StockAppColors.TextPrimary,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -1357,9 +1529,20 @@ private fun resolvePreviewValue(fields: Map<String, String>, key: String): Strin
     return QrDataParser.getFieldValue(fields, key).ifBlank { "-" }
 }
 
+private var cachedTimestampLocale: Locale? = null
+private var cachedTimestampFormatter: SimpleDateFormat? = null
+
 private fun formatRecordTimestamp(epochMillis: Long): String {
     return runCatching {
-        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val locale = Locale.getDefault()
+        val formatter = if (cachedTimestampFormatter == null || cachedTimestampLocale != locale) {
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", locale).also {
+                cachedTimestampFormatter = it
+                cachedTimestampLocale = locale
+            }
+        } else {
+            cachedTimestampFormatter ?: SimpleDateFormat("yyyy-MM-dd HH:mm:ss", locale)
+        }
         formatter.format(Date(epochMillis))
     }.getOrElse { "-" }
 }
@@ -1390,12 +1573,4 @@ private fun extractBarcodeFromIntent(intent: Intent): String? {
         }
     }
     return null
-}
-
-private tailrec fun Context.findActivity(): Activity? {
-    return when (this) {
-        is Activity -> this
-        is ContextWrapper -> baseContext.findActivity()
-        else -> null
-    }
 }

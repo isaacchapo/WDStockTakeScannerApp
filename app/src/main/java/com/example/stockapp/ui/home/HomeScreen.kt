@@ -1,6 +1,7 @@
 package com.example.stockapp.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -37,7 +39,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.stockapp.ui.common.GlowBackground
+import com.example.stockapp.R
+import com.example.stockapp.ui.common.StockAppBackground
+import com.example.stockapp.ui.common.ScreenAppear
+import com.example.stockapp.ui.common.StockAppColors
+import com.example.stockapp.ui.common.StockAppTopBar
 
 @Composable
 fun HomeScreen(
@@ -47,67 +53,75 @@ fun HomeScreen(
     onShare: () -> Unit,
     onLogout: () -> Unit
 ) {
-    GlowBackground(baseColor = Color(0xFFF3F7FC)) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            TopBarTitle()
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 20.dp, vertical = 22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                UserInfoCard(loggedInUser = loggedInUser)
-                Spacer(modifier = Modifier.height(28.dp))
+    StockAppBackground {
+        ScreenAppear {
+            Column(modifier = Modifier.fillMaxSize()) {
+                StockAppTopBar(title = "STOCK TAKE", logoResId = R.drawable.logo)
 
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 20.dp, vertical = 22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    HomeCard(
-                        text = "Create Stock Take",
-                        subtitle = null,
-                        icon = Icons.Filled.QrCodeScanner,
-                        onClick = onCreateStockCard
-                    )
-                    HomeCard(
-                        text = "View Stock Take",
-                        subtitle = null,
-                        icon = Icons.Filled.Visibility,
-                        onClick = onViewStockCard
-                    )
-                    HomeCard(
-                        text = "Share",
-                        subtitle = null,
-                        icon = Icons.Filled.Share,
-                        onClick = onShare
-                    )
+                    UserInfoCard(loggedInUser = loggedInUser)
+                    Spacer(modifier = Modifier.height(28.dp))
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        HomeCard(
+                            text = "Create Stock Take",
+                            subtitle = null,
+                            icon = Icons.Filled.QrCodeScanner,
+                            onClick = onCreateStockCard
+                        )
+                        HomeCard(
+                            text = "View Stock Take",
+                            subtitle = null,
+                            icon = Icons.Filled.Visibility,
+                            onClick = onViewStockCard
+                        )
+                        HomeCard(
+                            text = "Share",
+                            subtitle = null,
+                            icon = Icons.Filled.Share,
+                            onClick = onShare
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    OutlinedButton(
+                        onClick = onLogout,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = StockAppColors.CardSurface,
+                            contentColor = StockAppColors.AccentAmber,
+                            disabledContainerColor = StockAppColors.DisabledSurface,
+                            disabledContentColor = StockAppColors.DisabledText
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Logout,
+                            contentDescription = "Logout",
+                            tint = StockAppColors.AccentAmber,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .padding(end = 6.dp)
+                        )
+                        Text(
+                            text = "Logout",
+                            color = StockAppColors.AccentAmber,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
-
-                OutlinedButton(
-                    onClick = onLogout,
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Logout,
-                        contentDescription = "Logout",
-                        tint = Color(0xFF0D47A1),
-                        modifier = Modifier
-                            .size(20.dp)
-                            .padding(end = 6.dp)
-                    )
-                    Text(
-                        text = "Logout",
-                        color = Color(0xFF0D47A1),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+                FooterBranding()
             }
-
-            FooterBranding()
         }
     }
 }
@@ -123,10 +137,11 @@ fun HomeCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(74.dp)
-            .clickable { onClick() },
+            .clickable { onClick() }
+            .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(14.dp)),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F1FF)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 5.dp)
+        colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier
@@ -139,13 +154,13 @@ fun HomeCard(
                 modifier = Modifier
                     .size(46.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFD6E6FF)),
+                    .background(StockAppColors.AccentCyan.copy(alpha = 0.18f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = Color(0xFF0A4A99),
+                    tint = StockAppColors.AccentCyan,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -155,14 +170,14 @@ fun HomeCard(
             ) {
                 Text(
                     text = text,
-                    color = Color(0xFF123B7A),
+                    color = StockAppColors.TextPrimary,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.SemiBold
                 )
                 if (!subtitle.isNullOrBlank()) {
                     Text(
                         text = subtitle,
-                        color = Color(0xFF607D8B),
+                        color = StockAppColors.TextSecondary,
                         fontSize = 12.sp
                     )
                 }
@@ -171,12 +186,12 @@ fun HomeCard(
                 modifier = Modifier
                     .size(32.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White.copy(alpha = 0.7f)),
+                    .background(StockAppColors.AccentCyan.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "›",
-                    color = Color(0xFF0A4A99),
+                    color = StockAppColors.AccentCyan,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -186,31 +201,14 @@ fun HomeCard(
 }
 
 @Composable
-private fun TopBarTitle() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF0A4A99))
-            .padding(vertical = 18.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "STOCK TAKE APP",
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp
-        )
-    }
-}
-
-@Composable
 private fun UserInfoCard(loggedInUser: String) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(18.dp)),
         shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier
@@ -223,13 +221,13 @@ private fun UserInfoCard(loggedInUser: String) {
                 modifier = Modifier
                     .size(58.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFFE3F2FD)),
+                    .background(StockAppColors.AccentCyan.copy(alpha = 0.2f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Filled.Person,
                     contentDescription = "User Photo",
-                    tint = Color(0xFF0D47A1),
+                    tint = StockAppColors.AccentCyan,
                     modifier = Modifier.size(34.dp)
                 )
             }
@@ -237,13 +235,13 @@ private fun UserInfoCard(loggedInUser: String) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = "Logged In User",
-                    color = Color(0xFF607D8B),
+                    color = StockAppColors.TextSecondary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
                     text = loggedInUser.ifBlank { "Unknown User" },
-                    color = Color(0xFF0D47A1),
+                    color = StockAppColors.TextPrimary,
                     fontSize = 21.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -273,7 +271,7 @@ private fun FooterBranding() {
                 modifier = Modifier.clickable {
                     uriHandler.openUri("https://www.webdevzm.tech")
                 },
-                color = Color(0xFF2F6DA8),
+                color = StockAppColors.AccentCyan,
                 textAlign = TextAlign.Center,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
@@ -281,7 +279,7 @@ private fun FooterBranding() {
             )
             Text(
                 text = " | Contact: ",
-                color = Color(0xFF5B6F82),
+                color = StockAppColors.TextSecondary,
                 textAlign = TextAlign.Center,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
@@ -292,7 +290,7 @@ private fun FooterBranding() {
                 modifier = Modifier.clickable {
                     uriHandler.openUri("tel:0960911672")
                 },
-                color = Color(0xFF1E4E8C),
+                color = StockAppColors.AccentAmber,
                 textAlign = TextAlign.Center,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -301,9 +299,9 @@ private fun FooterBranding() {
         }
         Text(
             text = "Developed By Webdev Technologies",
-            color = Color(0xFF1E4E8C),
+            color = StockAppColors.TextSecondary,
             textAlign = TextAlign.Center,
-            fontSize = 14.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
             fontFamily = FontFamily.Serif,
             fontStyle = FontStyle.Italic,

@@ -27,20 +27,26 @@ fun TidyTextField(
     placeholder: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    matchCardSurface: Boolean = false,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     singleLine: Boolean = true
 ) {
+    val backgroundColor = if (matchCardSurface) {
+        StockAppColors.CardSurface
+    } else {
+        StockAppColors.FieldSurface
+    }
     Row(
         modifier = modifier
             .height(42.dp)
             .background(
-                if (enabled) Color(0xFFF8FBFF) else Color(0xFFECEFF1),
+                if (enabled) backgroundColor else StockAppColors.DisabledSurface,
                 RoundedCornerShape(50)
             )
             .border(
                 1.dp,
-                if (enabled) Color(0xFFB0BEC5) else Color(0xFFCFD8DC),
+                if (enabled) StockAppColors.FieldBorder else StockAppColors.CardBorder,
                 RoundedCornerShape(50)
             )
             .padding(horizontal = 16.dp),
@@ -56,12 +62,16 @@ fun TidyTextField(
             keyboardOptions = keyboardOptions,
             textStyle = TextStyle(
                 fontSize = 14.sp,
-                color = if (enabled) Color(0xFF102027) else Color(0xFF757575)
+                color = if (enabled) StockAppColors.TextPrimary else StockAppColors.DisabledText
             ),
             decorationBox = { innerTextField ->
                 Box(contentAlignment = Alignment.CenterStart) {
                     if (value.isEmpty()) {
-                        Text(placeholder, color = Color(0xFF90A4AE), fontSize = 13.sp)
+                        Text(
+                            placeholder,
+                            color = StockAppColors.TextSecondary,
+                            fontSize = 13.sp
+                        )
                     }
                     innerTextField()
                 }
