@@ -3,7 +3,6 @@ package com.example.stockapp.ui.sharing
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
@@ -36,6 +35,8 @@ suspend fun shareStockSchemaAsStyledPdf(
 
 private data class ParsedSchemaRecord(
     val location: String,
+    val stockName: String,
+    val identifierKey: String,
     val sid: String,
     val uid: String,
     val dateScanned: Long,
@@ -45,7 +46,6 @@ private data class ParsedSchemaRecord(
 
 private data class PdfDocumentGroup(
     val location: String,
-    val sid: String,
     val uid: String,
     val sections: List<PdfTableSection>
 )
@@ -67,6 +67,8 @@ private fun generateSchemaPdf(
     val parsedRecords = stockItems.map { item ->
         ParsedSchemaRecord(
             location = item.location,
+            stockName = item.stockName,
+            identifierKey = item.identifierKey,
             sid = item.sid,
             uid = item.ownerUid,
             dateScanned = item.dateScanned,
@@ -251,7 +253,6 @@ private fun generateSchemaPdf(
         drawMergedRow(
             text = buildMetadataText(
                 location = group.location,
-                sid = group.sid,
                 uid = group.uid,
                 exportedAt = exportedAt
             ),
@@ -300,38 +301,43 @@ private fun extractQrFields(variableData: String): Map<String, String> {
 private fun buildPdfSections(records: List<ParsedSchemaRecord>): List<PdfDocumentGroup> {
     val groupedRecords = linkedMapOf<String, MutableList<ParsedSchemaRecord>>()
     records.forEach { record ->
-        val groupKey = listOf(record.location, record.sid, record.uid).joinToString("|")
+        val groupKey = listOf(
+            record.location,
+            record.uid,
+            record.stockName.trim(),
+            record.identifierKey
+        ).joinToString("|")
         groupedRecords.getOrPut(groupKey) { mutableListOf() }.add(record)
     }
 
     return groupedRecords.values.map { groupRecords ->
-        val schemaGroups = linkedMapOf<String, MutableList<ParsedSchemaRecord>>()
+        val qrColumns = linkedMapOf<String, String>()
         groupRecords.forEach { record ->
-            val schemaKey = buildPdfSchemaKey(record.fields)
-            schemaGroups.getOrPut(schemaKey) { mutableListOf() }.add(record)
-        }
-
-        val sections = schemaGroups.values.map { schemaRecords ->
-            val qrColumns = linkedMapOf<String, String>()
-            schemaRecords.forEach { record ->
-                record.fields.keys.forEach { rawKey ->
-                    val displayKey = rawKey.trim()
-                    if (displayKey.isNotBlank()) {
-                        val normalized = normalizeColumnKey(displayKey)
-                        if (!qrColumns.containsKey(normalized)) {
-                            qrColumns[normalized] = displayKey
-                        }
+            record.fields.keys.forEach { rawKey ->
+                val displayKey = rawKey.trim()
+                if (displayKey.isNotBlank()) {
+                    val normalized = normalizeColumnKey(displayKey)
+                    if (!qrColumns.containsKey(normalized)) {
+                        qrColumns[normalized] = displayKey
                     }
                 }
             }
+        }
 
-            val orderedQrColumns = qrColumns.values.toMutableList()
-            if (orderedQrColumns.isEmpty()) {
-                orderedQrColumns += "DATA"
+        val orderedQrColumns = qrColumns.values
+            .filterNot { key ->
+                val normalized = normalizeColumnKey(key)
+                normalized == "sid" || normalized == "uid"
             }
+            .toMutableList()
+        if (orderedQrColumns.isEmpty()) {
+            orderedQrColumns += "DATA"
+        }
 
-            val columns = orderedQrColumns + "TIMESTAMP"
-            val rows = schemaRecords.map { record ->
+        val columns = listOf("SID", "UID") + orderedQrColumns + "TIMESTAMP"
+        val rows = groupRecords
+            .sortedByDescending { it.dateScanned }
+            .map { record ->
                 val baseValues = orderedQrColumns.map { columnName ->
                     if (columnName == "DATA") {
                         record.rawData
@@ -343,19 +349,19 @@ private fun buildPdfSections(records: List<ParsedSchemaRecord>): List<PdfDocumen
                             .orEmpty()
                     }
                 }
-                baseValues + formatPdfTimestamp(record.dateScanned)
+                listOf(record.sid, record.uid) + baseValues + formatPdfTimestamp(record.dateScanned)
             }
 
+        val sections = listOf(
             PdfTableSection(
                 title = buildSectionTitleText(columns),
                 columns = columns,
                 rows = rows
             )
-        }
+        )
 
         PdfDocumentGroup(
             location = groupRecords.firstOrNull()?.location.orEmpty(),
-            sid = groupRecords.firstOrNull()?.sid.orEmpty(),
             uid = groupRecords.firstOrNull()?.uid.orEmpty(),
             sections = sections
         )
@@ -366,14 +372,18 @@ private fun buildTitleText(location: String): String {
     return "ZAMEFA ${location.ifBlank { "-" }}".uppercase()
 }
 
-private fun buildMetadataText(location: String, sid: String, uid: String, exportedAt: Long): String {
-    return "LOCATION: ${location.ifBlank { "-" }} | SID: ${sid.ifBlank { "-" }} | UID: ${uid.ifBlank { "-" }} | EXPORTED: ${formatPdfTimestamp(exportedAt)}"
+private fun buildMetadataText(location: String, uid: String, exportedAt: Long): String {
+    return "LOCATION: ${location.ifBlank { "-" }} | UID: ${uid.ifBlank { "-" }} | EXPORTED: ${formatPdfDate(exportedAt)}"
         .uppercase()
 }
 
 private fun buildSectionTitleText(columns: List<String>): String {
     val summary = columns
-        .filterNot { it.equals("TIMESTAMP", ignoreCase = true) }
+        .filterNot {
+            it.equals("TIMESTAMP", ignoreCase = true) ||
+                it.equals("SID", ignoreCase = true) ||
+                it.equals("UID", ignoreCase = true)
+        }
         .take(3)
         .joinToString(" / ") { it.uppercase() }
 
@@ -390,6 +400,12 @@ private fun formatPdfTimestamp(epochMillis: Long): String {
     }.getOrElse { "-" }
 }
 
+private fun formatPdfDate(epochMillis: Long): String {
+    return runCatching {
+        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(epochMillis))
+    }.getOrElse { "-" }
+}
+
 private fun buildFileName(sid: String, schemaId: String, extension: String): String {
     val safeSid = sid.ifBlank { "sid" }.replace(Regex("[^A-Za-z0-9_-]"), "_")
     val safeSchemaId = schemaId.ifBlank { "schema" }.replace(Regex("[^A-Za-z0-9_-]"), "_")
@@ -403,17 +419,6 @@ private fun normalizeColumnKey(raw: String): String {
         .replace(Regex("[^a-z0-9]"), "")
 }
 
-private fun buildPdfSchemaKey(fields: Map<String, String>): String {
-    return fields.keys
-        .asSequence()
-        .map(::normalizeColumnKey)
-        .filter { it.isNotBlank() }
-        .distinct()
-        .sorted()
-        .joinToString("|")
-        .ifBlank { "data" }
-}
-
 private fun shareFile(context: Context, file: File, mimeType: String) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val shareIntent: Intent = Intent().apply {
@@ -422,17 +427,6 @@ private fun shareFile(context: Context, file: File, mimeType: String) {
         type = mimeType
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         clipData = ClipData.newUri(context.contentResolver, "stock-share", uri)
-    }
-    val resolveInfos = context.packageManager.queryIntentActivities(
-        shareIntent,
-        PackageManager.MATCH_DEFAULT_ONLY
-    )
-    resolveInfos.forEach { info ->
-        context.grantUriPermission(
-            info.activityInfo.packageName,
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION
-        )
     }
     context.startActivity(Intent.createChooser(shareIntent, "Share Stock Data"))
 }

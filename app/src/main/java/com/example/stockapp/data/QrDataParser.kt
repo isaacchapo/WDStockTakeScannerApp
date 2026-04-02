@@ -11,7 +11,31 @@ import java.util.Locale
  * Parses QR code data and extracts dynamic identifiers and raw data.
  */
 object QrDataParser {
-    private const val REQUIRED_IDENTIFIER_COUNT = 3
+    private const val REQUIRED_IDENTIFIER_COUNT = 4
+    private const val REQUIRED_ORDER_NO_KEY = "orderno"
+    private val requiredTableRules = listOf(
+        RequiredTableRule(
+            label = "DRUM NO",
+            normalizedAliases = setOf("drumno", "drumnumber")
+        ),
+        RequiredTableRule(
+            label = "ORDER NO",
+            normalizedAliases = setOf("orderno", "ordernumber")
+        ),
+        RequiredTableRule(
+            label = "SIZE",
+            normalizedAliases = setOf("size")
+        ),
+        RequiredTableRule(
+            label = "NET MASS",
+            normalizedAliases = setOf("netmass", "netweight")
+        ),
+        RequiredTableRule(
+            label = "DATE",
+            normalizedAliases = setOf("date"),
+            containsTokens = setOf("date")
+        )
+    )
 
     private val identifierPriority = listOf(
         "itemid",
@@ -43,6 +67,11 @@ object QrDataParser {
         "location",
         "description"
     )
+
+    private val BASE64_CHARSET_REGEX = Regex("^[A-Za-z0-9+/=]+$")
+    private val GS1_PAREN_REGEX = Regex("\\((\\d{2,4})\\)([^()\\u001D]+)")
+    private val GS1_SEGMENT_REGEX = Regex("^(\\d{2,4})(.+)$")
+    private val NON_ALPHANUMERIC_KEY_REGEX = Regex("[^a-z0-9]")
 
     /**
      * Parsed QR data model.
@@ -138,6 +167,11 @@ object QrDataParser {
     ): List<String> {
         if (requiredCount <= 0) return emptyList()
 
+        val matchedRequiredKeys = resolveRequiredTableRuleKeys(fields)
+        if (matchedRequiredKeys.size >= requiredCount) {
+            return matchedRequiredKeys.take(requiredCount)
+        }
+
         val nonBlankEntries = fields
             .filter { (_, value) -> value.trim().isNotBlank() }
             .map { (key, _) ->
@@ -159,12 +193,39 @@ object QrDataParser {
         return ordered.take(requiredCount).map { it.key }
     }
 
+    fun getMissingRequiredTableRules(fields: Map<String, String>): List<String> {
+        return requiredTableRules
+            .filter { rule ->
+                resolveRequiredTableRuleKey(fields, rule).isNullOrBlank()
+            }
+            .map { it.label }
+    }
+
+    fun hasRequiredTableRules(fields: Map<String, String>): Boolean {
+        return getMissingRequiredTableRules(fields).isEmpty()
+    }
+
     fun getFieldValue(fields: Map<String, String>, fieldName: String): String {
         val direct = fields[fieldName]
         if (!direct.isNullOrBlank()) return direct
 
         val normalizedTarget = normalizeKey(fieldName)
         return fields.entries.firstOrNull { normalizeKey(it.key) == normalizedTarget }?.value.orEmpty()
+    }
+
+    fun getOrderNo(fields: Map<String, String>): String? {
+        if (fields.isEmpty()) return null
+        for ((key, value) in fields) {
+            if (normalizeKey(key) == REQUIRED_ORDER_NO_KEY) {
+                val trimmed = value.trim()
+                if (trimmed.isNotBlank()) return trimmed
+            }
+        }
+        return null
+    }
+
+    fun hasOrderNo(fields: Map<String, String>): Boolean {
+        return !getOrderNo(fields).isNullOrBlank()
     }
 
     private fun parseJsonCandidate(candidate: String): ParsedQrData? {
@@ -240,7 +301,7 @@ object QrDataParser {
         val normalized = compact
             .replace('-', '+')
             .replace('_', '/')
-        if (!normalized.matches(Regex("^[A-Za-z0-9+/=]+$"))) return null
+        if (!normalized.matches(BASE64_CHARSET_REGEX)) return null
 
         val padded = when (normalized.length % 4) {
             0 -> normalized
@@ -322,7 +383,7 @@ object QrDataParser {
         val fields = linkedMapOf<String, String>()
 
         // Common readable GS1 representation, e.g. (01)123...(21)ABC...
-        Regex("\\((\\d{2,4})\\)([^()\\u001D]+)")
+        GS1_PAREN_REGEX
             .findAll(trimmed)
             .forEach { match ->
                 val ai = match.groupValues[1]
@@ -339,7 +400,7 @@ object QrDataParser {
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
                 .forEachIndexed { index, segment ->
-                    val aiMatch = Regex("^(\\d{2,4})(.+)$").find(segment)
+                    val aiMatch = GS1_SEGMENT_REGEX.find(segment)
                     if (aiMatch != null) {
                         val ai = aiMatch.groupValues[1]
                         val value = aiMatch.groupValues[2].trim()
@@ -472,7 +533,7 @@ object QrDataParser {
         return rawKey
             .trim()
             .lowercase(Locale.ROOT)
-            .replace(Regex("[^a-z0-9]"), "")
+            .replace(NON_ALPHANUMERIC_KEY_REGEX, "")
     }
 
     private fun scoreKey(rawKey: String): Int {
@@ -502,9 +563,39 @@ object QrDataParser {
         return score
     }
 
+    private fun resolveRequiredTableRuleKeys(fields: Map<String, String>): List<String> {
+        return requiredTableRules.mapNotNull { rule ->
+            resolveRequiredTableRuleKey(fields, rule)
+        }
+    }
+
+    private fun resolveRequiredTableRuleKey(
+        fields: Map<String, String>,
+        rule: RequiredTableRule
+    ): String? {
+        fields.entries.forEach { (rawKey, rawValue) ->
+            val normalizedKey = normalizeKey(rawKey)
+            if (!rule.matches(normalizedKey)) return@forEach
+            if (rawValue.trim().isBlank()) return@forEach
+            return rawKey
+        }
+        return null
+    }
+
     private data class ScoredField(
         val key: String,
         val normalizedKey: String,
         val score: Int
     )
+
+    private data class RequiredTableRule(
+        val label: String,
+        val normalizedAliases: Set<String>,
+        val containsTokens: Set<String> = emptySet()
+    ) {
+        fun matches(normalizedKey: String): Boolean {
+            if (normalizedKey in normalizedAliases) return true
+            return containsTokens.any { token -> normalizedKey.contains(token) }
+        }
+    }
 }

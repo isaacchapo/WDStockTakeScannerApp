@@ -6,6 +6,10 @@ import androidx.room.PrimaryKey
 /**
  * Represents a single user in the database.
  *
+ * Table rules:
+ * - Table name: user_table
+ * - Primary key: uid
+ *
  * @property uid The unique identifier for the user.
  * @property passwordHash The user's hashed password for security.
  */

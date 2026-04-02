@@ -9,10 +9,15 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * The Room database for this app.
+ *
+ * Schema ownership:
+ * - Entities define the current table shape and primary keys.
+ * - Migrations below define how to move between schema versions.
+ * - DAOs define query behavior and should be reviewed when schema changes.
  */
 @Database(
     entities = [StockItem::class, User::class, SavedLocation::class, UploadDevice::class],
-    version = 15,
+    version = 16,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -66,11 +71,41 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_11_12,
                     MIGRATION_12_13,
                     MIGRATION_13_14,
-                    MIGRATION_14_15
+                    MIGRATION_14_15,
+                    MIGRATION_15_16
                 )
+                .addCallback(QUERY_OPTIMIZATION_CALLBACK)
                 .build()
                 INSTANCE = instance
                 instance
+            }
+        }
+
+        /**
+         * Schema history.
+         *
+         * Keep these migrations aligned with the @Database version and entity definitions.
+         * When adding a table or column:
+         * - Update the relevant @Entity.
+         * - Add a migration here (or add a destructive migration if acceptable).
+         * - Review DAOs that read/write the changed schema.
+         */
+
+        /**
+         * Adds expression indexes used by normalized query filters.
+         * These run safely on every open and do not require a schema version bump.
+         */
+        private val QUERY_OPTIMIZATION_CALLBACK = object : RoomDatabase.Callback() {
+            override fun onOpen(db: SupportSQLiteDatabase) {
+                super.onOpen(db)
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_stock_table_ownerUid_location_stockNameNorm_identifierKey_dateScanned_expr " +
+                        "ON stock_table(ownerUid, location, COALESCE(NULLIF(trim(stockName), ''), ''), identifierKey, dateScanned)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_stock_table_ownerUid_locationNorm_expr " +
+                        "ON stock_table(ownerUid, lower(trim(location)))"
+                )
             }
         }
 
@@ -79,6 +114,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Rename legacy column to match current schema.
                 db.execSQL("ALTER TABLE stock_table RENAME COLUMN section TO location")
             }
         }
@@ -88,8 +124,10 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Add new columns with defaults to keep existing rows valid.
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN stockCode TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN stockTakeId TEXT NOT NULL DEFAULT ''")
+                // Rebuild table with explicit types and constraints.
                 db.execSQL("CREATE TABLE new_stock_table (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, itemId TEXT NOT NULL, description TEXT NOT NULL, quantity INTEGER NOT NULL, location TEXT NOT NULL, stockCode TEXT NOT NULL, stockTakeId TEXT NOT NULL)")
                 db.execSQL("INSERT INTO new_stock_table (itemId, description, quantity, location, stockCode, stockTakeId) SELECT id, name, quantity, location, stockCode, stockTakeId FROM stock_table")
                 db.execSQL("DROP TABLE stock_table")
@@ -102,6 +140,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Align column naming with current model.
                 db.execSQL("ALTER TABLE stock_table RENAME COLUMN name TO description")
             }
         }
@@ -111,6 +150,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Introduce ownership for multi-user data separation.
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN ownerUid TEXT NOT NULL DEFAULT ''")
                 db.execSQL("UPDATE stock_table SET ownerUid = stockTakeId WHERE ownerUid = ''")
             }
@@ -121,6 +161,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Table: saved_location_table (PK: ownerUid + locationNormalized).
                 db.execSQL(
                     "CREATE TABLE IF NOT EXISTS saved_location_table (" +
                         "ownerUid TEXT NOT NULL, " +
@@ -130,6 +171,7 @@ abstract class AppDatabase : RoomDatabase() {
                         "PRIMARY KEY(ownerUid, locationNormalized))"
                 )
 
+                // Seed saved locations derived from existing stock_table rows.
                 db.execSQL(
                     "INSERT OR IGNORE INTO saved_location_table " +
                         "(ownerUid, locationNormalized, location, sid) " +
@@ -151,7 +193,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_10_11 = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // Create new table with hybrid schema
+                // Create new table with hybrid schema (PK: id).
                 db.execSQL(
                     "CREATE TABLE new_stock_table (" +
                         "id TEXT PRIMARY KEY NOT NULL, " +
@@ -162,7 +204,7 @@ abstract class AppDatabase : RoomDatabase() {
                         "ownerUid TEXT NOT NULL)"
                 )
 
-                // Migrate data: convert old fields to JSON
+                // Migrate data: convert old columns into JSON payload.
                 db.execSQL(
                     "INSERT INTO new_stock_table (id, orderNo, location, dateScanned, variableData, ownerUid) " +
                         "SELECT " +
@@ -175,7 +217,7 @@ abstract class AppDatabase : RoomDatabase() {
                         "FROM stock_table"
                 )
 
-                // Drop old table and rename
+                // Replace the old table with the new schema.
                 db.execSQL("DROP TABLE stock_table")
                 db.execSQL("ALTER TABLE new_stock_table RENAME TO stock_table")
             }
@@ -186,6 +228,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Add schema grouping fields; defaults prevent nulls.
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN sid TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN identifierKey TEXT NOT NULL DEFAULT ''")
                 db.execSQL(
@@ -200,6 +243,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_12_13 = object : Migration(12, 13) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Optional upload timestamp.
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN uploadedAt INTEGER")
             }
         }
@@ -209,6 +253,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_13_14 = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Add display name for stock takes.
                 db.execSQL("ALTER TABLE stock_table ADD COLUMN stockName TEXT NOT NULL DEFAULT ''")
             }
         }
@@ -218,6 +263,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         private val MIGRATION_14_15 = object : Migration(14, 15) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                // Table: upload_device_table (PK: ownerUid + nameNormalized).
                 db.execSQL(
                     "CREATE TABLE IF NOT EXISTS upload_device_table (" +
                         "ownerUid TEXT NOT NULL, " +
@@ -227,6 +273,30 @@ abstract class AppDatabase : RoomDatabase() {
                         "endpointPath TEXT NOT NULL, " +
                         "apiKey TEXT NOT NULL, " +
                         "PRIMARY KEY(ownerUid, nameNormalized))"
+                )
+            }
+        }
+
+        /**
+         * Migration from version 15 to 16: add indexes for heavy stock queries.
+         */
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_stock_table_ownerUid_dateScanned " +
+                        "ON stock_table(ownerUid, dateScanned)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_stock_table_ownerUid_location_stockName_identifierKey_dateScanned " +
+                        "ON stock_table(ownerUid, location, stockName, identifierKey, dateScanned)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_stock_table_ownerUid_location_sid_identifierKey_dateScanned " +
+                        "ON stock_table(ownerUid, location, sid, identifierKey, dateScanned)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_stock_table_ownerUid_uploadedAt " +
+                        "ON stock_table(ownerUid, uploadedAt)"
                 )
             }
         }

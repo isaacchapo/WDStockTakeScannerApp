@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -59,11 +58,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.stockapp.data.JsonFieldExtractor
@@ -72,21 +69,60 @@ import com.example.stockapp.data.local.InventoryGroup
 import com.example.stockapp.data.local.StockItem
 import com.example.stockapp.data.local.UploadDevice
 import com.example.stockapp.ui.StockViewModel
-import com.example.stockapp.ui.common.StockAppBackground
-import com.example.stockapp.ui.common.ScreenAppear
 import com.example.stockapp.ui.common.StockAppColors
 import com.example.stockapp.ui.common.stockOutlinedTextFieldColors
 import com.example.stockapp.ui.sharing.shareStockSchemaAsStyledPdf
-import com.example.stockapp.ui.upload.showStockUploadSuccessNotification
+import com.example.stockapp.ui.upload.DEFAULT_UPLOAD_ENDPOINT_PATH
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.roundToInt
 
 private val DEFAULT_TABLE_COLUMNS = listOf("FIELD1", "FIELD2", "FIELD3", "FIELD4")
+private val EMPTY_TABLE_VALUES = listOf("-", "-", "-", "-")
+private val HTTP_PREFIX_REGEX = Regex("^https?://", RegexOption.IGNORE_CASE)
+
+internal fun sanitizeDeviceBaseUrlInput(rawInput: String): String {
+    return rawInput
+        .trim()
+        .replaceFirst(HTTP_PREFIX_REGEX, "")
+        .trim('/')
+}
+
+internal fun buildDeviceBaseUrl(baseUrlInput: String): String {
+    val hostAndPort = sanitizeDeviceBaseUrlInput(baseUrlInput)
+    return "http://$hostAndPort"
+}
+
+internal fun sanitizeEndpointSuffixInput(rawInput: String): String {
+    val trimmed = rawInput.trim()
+    if (trimmed.isBlank()) return ""
+
+    val hasScheme = HTTP_PREFIX_REGEX.containsMatchIn(trimmed)
+    val withoutScheme = trimmed.replaceFirst(HTTP_PREFIX_REGEX, "")
+    val beforeFirstSlash = withoutScheme.substringBefore('/')
+    val looksLikeHostPort = beforeFirstSlash.contains('.') ||
+        beforeFirstSlash.contains(':') ||
+        beforeFirstSlash.equals("localhost", ignoreCase = true)
+    val pathCandidate = if ((hasScheme || looksLikeHostPort) && withoutScheme.contains('/')) {
+        withoutScheme.substringAfter('/', "")
+    } else {
+        withoutScheme
+    }
+    val normalizedPath = pathCandidate.trim().trim('/')
+    return normalizedPath
+}
+
+internal fun buildEndpointPath(endpointSuffixInput: String): String {
+    val normalizedPath = sanitizeEndpointSuffixInput(endpointSuffixInput)
+    return if (normalizedPath.isBlank()) {
+        DEFAULT_UPLOAD_ENDPOINT_PATH
+    } else {
+        "/$normalizedPath"
+    }
+}
 
 @Composable
 fun ViewStockCardScreen(
@@ -116,24 +152,30 @@ fun ViewStockCardScreen(
     val selectedGroup = selectedGroupState.value
     val openedGroup = openedGroupState.value
     val actionGroup = actionGroupState.value
+    val allGroupKeys = remember(inventoryGroups) {
+        inventoryGroups.mapTo(mutableSetOf()) { it.toKey() }
+    }
+    val isAllSelected = allGroupKeys.isNotEmpty() && selectedGroupKeys.containsAll(allGroupKeys)
 
     val stockItems by if (openedGroup != null) {
-        stockViewModel.getItemsForTable(
+        stockViewModel.getItemsForTableAllSchemas(
             location = openedGroup.location,
-            sid = openedGroup.sid
+            stockName = openedGroup.stockName
         ).collectAsState(initial = emptyList())
     } else {
         remember { mutableStateOf(emptyList()) }
     }
 
-    val tableColumns by produceState(
-        initialValue = DEFAULT_TABLE_COLUMNS,
+    val tableRenderData by produceState(
+        initialValue = TableRenderData(DEFAULT_TABLE_COLUMNS, emptyMap()),
         stockItems
     ) {
         value = withContext(Dispatchers.Default) {
-            resolveTableColumns(stockItems)
+            buildTableRenderData(stockItems)
         }
     }
+    val tableColumns = tableRenderData.columns
+    val rowValuesByItemId = tableRenderData.rowValuesByItemId
     
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -146,12 +188,13 @@ fun ViewStockCardScreen(
     var showAddDeviceDialog by remember { mutableStateOf(false) }
     var deviceName by rememberSaveable { mutableStateOf("") }
     var deviceBaseUrl by rememberSaveable { mutableStateOf("") }
-    var deviceEndpointPath by rememberSaveable { mutableStateOf("/api/stock/upload") }
+    var deviceEndpointSuffix by rememberSaveable { mutableStateOf("") }
     var deviceApiKey by rememberSaveable { mutableStateOf("") }
     var selectedUploadDeviceKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingUploadItems by remember { mutableStateOf<List<StockItem>>(emptyList()) }
     var isUploading by remember { mutableStateOf(false) }
     var isSavingDevice by remember { mutableStateOf(false) }
+    var showUploadSuccessDialog by remember { mutableStateOf(false) }
 
     fun toggleGroupSelection(groupKey: String) {
         selectedGroupKeys = if (selectedGroupKeys.contains(groupKey)) {
@@ -187,7 +230,11 @@ fun ViewStockCardScreen(
 
     suspend fun collectItemsForGroups(groups: List<InventoryGroup>): List<StockItem> {
         return groups.flatMap { group ->
-            stockViewModel.getItemsForTableSnapshot(group.location, group.sid)
+            stockViewModel.getItemsForTableSnapshot(
+                location = group.location,
+                stockName = group.stockName,
+                identifierKey = group.identifierKey
+            )
         }
     }
 
@@ -220,19 +267,19 @@ fun ViewStockCardScreen(
         }
     }
 
-    StockAppBackground {
-        ScreenAppear {
-            Column(
-                modifier = Modifier.fillMaxSize()
-            ) {
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
                 // Top Bar
-                val topBarBrush = Brush.horizontalGradient(
-                    colors = listOf(
-                        StockAppColors.NavyMid,
-                        StockAppColors.NavyBase,
-                        StockAppColors.NavyDeep
+                val topBarBrush = remember {
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            StockAppColors.NavyMid,
+                            StockAppColors.NavyBase,
+                            StockAppColors.NavyDeep
+                        )
                     )
-                )
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -249,7 +296,6 @@ fun ViewStockCardScreen(
                         },
                         modifier = Modifier
                             .align(Alignment.CenterStart)
-                            .background(StockAppColors.AccentCyan.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
                             .size(34.dp)
                     ) {
                         Icon(
@@ -273,25 +319,60 @@ fun ViewStockCardScreen(
                         modifier = Modifier.align(Alignment.Center)
                     )
 
-                    if (openedGroup == null) {
+                    if (openedGroup == null && selectedGroupKeys.isNotEmpty()) {
                         TextButton(
                             onClick = {
-                                selectedGroupKeys = inventoryGroups
-                                    .mapTo(mutableSetOf()) { it.toKey() }
+                                selectedGroupKeys = allGroupKeys
                             },
                             enabled = inventoryGroups.isNotEmpty(),
                             modifier = Modifier.align(Alignment.CenterEnd)
                         ) {
-                            Text(
-                                text = "Select All",
-                                color = if (inventoryGroups.isNotEmpty()) {
-                                    StockAppColors.AccentCyan
-                                } else {
-                                    StockAppColors.DisabledText
-                                },
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(
+                                            if (isAllSelected) {
+                                                StockAppColors.AccentCyan
+                                            } else {
+                                                Color.Transparent
+                                            }
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (inventoryGroups.isNotEmpty()) {
+                                                StockAppColors.AccentCyan
+                                            } else {
+                                                StockAppColors.DisabledText
+                                            },
+                                            RoundedCornerShape(50)
+                                        )
+                                ) {
+                                    if (isAllSelected) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.Center)
+                                                .size(5.dp)
+                                                .clip(RoundedCornerShape(50))
+                                                .background(StockAppColors.NavyDeep)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "All",
+                                    color = if (inventoryGroups.isNotEmpty()) {
+                                        StockAppColors.AccentCyan
+                                    } else {
+                                        StockAppColors.DisabledText
+                                    },
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                 }
@@ -350,87 +431,102 @@ fun ViewStockCardScreen(
                                     )
                                 }
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            LazyListScrollbar(
-                                state = groupListState,
-                                modifier = Modifier.padding(vertical = 6.dp)
-                            )
                         }
                     } else {
-                        val tableHeaderShape = RoundedCornerShape(8.dp)
-                        Row(
+                        val tableContainerShape = RoundedCornerShape(12.dp)
+                        val tableHeaderShape = RoundedCornerShape(
+                            topStart = 12.dp,
+                            topEnd = 12.dp,
+                            bottomStart = 0.dp,
+                            bottomEnd = 0.dp
+                        )
+                        val tableGridLineColor = StockAppColors.TextSecondary.copy(alpha = 0.42f)
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(tableHeaderShape)
-                                .background(StockAppColors.NavyBase)
-                                .border(1.dp, StockAppColors.CardBorder, tableHeaderShape)
-                                .height(IntrinsicSize.Min),
-                            verticalAlignment = Alignment.CenterVertically
+                                .weight(1f)
+                                .clip(tableContainerShape)
+                                .border(1.dp, StockAppColors.CardBorder, tableContainerShape)
+                                .background(StockAppColors.CardSurface)
                         ) {
-                            TableCell("No", 0.3f, isHeader = true, textColor = StockAppColors.TextPrimary)
-                            TableCell(tableColumns[0], 1f, isHeader = true, textColor = StockAppColors.TextPrimary)
-                            TableCell(tableColumns[1], 1.2f, isHeader = true, textColor = StockAppColors.TextPrimary)
-                            TableCell(tableColumns[2], 1f, isHeader = true, textColor = StockAppColors.TextPrimary)
-                            TableCell(tableColumns[3], 1f, isHeader = true, textColor = StockAppColors.TextPrimary, showRightDivider = false, textAlign = TextAlign.End)
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            LazyColumn(
-                                state = stockItemListState,
+                            Row(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
+                                    .fillMaxWidth()
+                                    .clip(tableHeaderShape)
+                                    .background(StockAppColors.NavyBase)
+                                    .height(IntrinsicSize.Min),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                itemsIndexed(
-                                    items = stockItems,
-                                    key = { _, item -> item.id }
-                                ) { index, item ->
-                                    val rowColor = if (index % 2 == 0) {
-                                        StockAppColors.CardSurface
-                                    } else {
-                                        StockAppColors.FieldSurface
-                                    }
-                                    val itemFields = remember(item.variableData) {
-                                        JsonFieldExtractor.extractAllFields(item.variableData)
-                                    }
+                                TableCell("No", 0.3f, isHeader = true, textColor = StockAppColors.TextPrimary)
+                                TableCell(tableColumns[0], 1f, isHeader = true, textColor = StockAppColors.TextPrimary)
+                                TableCell(tableColumns[1], 1.2f, isHeader = true, textColor = StockAppColors.TextPrimary)
+                                TableCell(tableColumns[2], 1f, isHeader = true, textColor = StockAppColors.TextPrimary)
+                                TableCell(tableColumns[3], 1f, isHeader = true, textColor = StockAppColors.TextPrimary, showRightDivider = false, textAlign = TextAlign.End)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(tableGridLineColor)
+                            )
 
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(IntrinsicSize.Min)
-                                            .background(rowColor)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalAlignment = Alignment.CenterVertically
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                LazyColumn(
+                                    state = stockItemListState,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(),
+                                    userScrollEnabled = true
+                                ) {
+                                    itemsIndexed(
+                                        items = stockItems,
+                                        key = { _, item -> item.id }
+                                    ) { index, item ->
+                                        val rowColor = if (index % 2 == 0) {
+                                            StockAppColors.CardSurface
+                                        } else {
+                                            StockAppColors.FieldSurface
+                                        }
+                                        val tableValues = rowValuesByItemId[item.id] ?: EMPTY_TABLE_VALUES
+
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(IntrinsicSize.Min)
+                                                .background(rowColor)
                                         ) {
-                                            TableCell((index + 1).toString(), 0.3f)
-                                            TableCell(resolveTableValue(itemFields, tableColumns[0]), 1f)
-                                            TableCell(resolveTableValue(itemFields, tableColumns[1]), 1.2f)
-                                            TableCell(resolveTableValue(itemFields, tableColumns[2]), 1f)
-                                            TableCell(resolveTableValue(itemFields, tableColumns[3]), 1f, showRightDivider = false, textAlign = TextAlign.End)
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                TableCell((index + 1).toString(), 0.3f)
+                                                TableCell(tableValues.getOrElse(0) { "-" }, 1f)
+                                                TableCell(tableValues.getOrElse(1) { "-" }, 1.2f)
+                                                TableCell(tableValues.getOrElse(2) { "-" }, 1f)
+                                                TableCell(tableValues.getOrElse(3) { "-" }, 1f, showRightDivider = false, textAlign = TextAlign.End)
+                                            }
+                                            val scannedAtLabel = remember(item.dateScanned) {
+                                                formatRecordTimestamp(item.dateScanned)
+                                            }
+                                            Text(
+                                                text = "SID: ${item.sid.ifBlank { "-" }}  |  Scanned: $scannedAtLabel",
+                                                color = StockAppColors.TextSecondary,
+                                                fontSize = 10.sp,
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                                            )
                                         }
-                                        val scannedAtLabel = remember(item.dateScanned) {
-                                            formatRecordTimestamp(item.dateScanned)
-                                        }
-                                        Text(
-                                            text = "Scanned: $scannedAtLabel",
-                                            color = StockAppColors.TextSecondary,
-                                            fontSize = 10.sp,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(1.dp)
+                                                .background(tableGridLineColor)
                                         )
                                     }
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(1.dp)
-                                            .background(StockAppColors.CardBorder)
-                                    )
                                 }
                             }
                         }
@@ -460,7 +556,7 @@ fun ViewStockCardScreen(
                                     if (items.isEmpty()) {
                                         Toast.makeText(context, "No stock items", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        val sidValues = groups.map { it.sid }.distinct()
+                                        val sidValues = items.map { it.sid }.distinct()
                                         val sidHint = if (sidValues.size == 1) sidValues.first() else "MULTI"
                                         shareItemsAsPdf(items = items, sidHint = sidHint)
                                     }
@@ -495,7 +591,6 @@ fun ViewStockCardScreen(
                     }
                 }
             }
-        }
     }
 
     if (showAddDeviceDialog) {
@@ -514,16 +609,20 @@ fun ViewStockCardScreen(
                     )
                     OutlinedTextField(
                         value = deviceBaseUrl,
-                        onValueChange = { deviceBaseUrl = it },
-                        label = { Text("Base URL") },
+                        onValueChange = {
+                            deviceBaseUrl = sanitizeDeviceBaseUrlInput(it)
+                        },
+                        label = { Text("IP and Port") },
+                        prefix = { Text("http://") },
+                        placeholder = { Text("192.168.1.10:8080") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = stockOutlinedTextFieldColors()
                     )
                     OutlinedTextField(
-                        value = deviceEndpointPath,
-                        onValueChange = { deviceEndpointPath = it },
-                        label = { Text("Path (optional)") },
+                        value = deviceEndpointSuffix,
+                        onValueChange = { deviceEndpointSuffix = it },
+                        label = { Text("Path") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = stockOutlinedTextFieldColors()
@@ -561,8 +660,8 @@ fun ViewStockCardScreen(
                         isSavingDevice = true
                         stockViewModel.addUploadDevice(
                             name = deviceName,
-                            baseUrl = deviceBaseUrl,
-                            endpointPath = deviceEndpointPath,
+                            baseUrl = buildDeviceBaseUrl(deviceBaseUrl),
+                            endpointPath = buildEndpointPath(deviceEndpointSuffix),
                             apiKey = deviceApiKey
                         ) { result ->
                             isSavingDevice = false
@@ -571,7 +670,7 @@ fun ViewStockCardScreen(
                                 selectedUploadDeviceKey = deviceName.trim().lowercase(Locale.ROOT)
                                 deviceName = ""
                                 deviceBaseUrl = ""
-                                deviceEndpointPath = "/api/stock/upload"
+                                deviceEndpointSuffix = ""
                                 deviceApiKey = ""
                                 showAddDeviceDialog = false
                             } else {
@@ -652,16 +751,10 @@ fun ViewStockCardScreen(
                             )
                             isUploading = false
                             if (result.isSuccess) {
-                                val msg = result.getOrNull().orEmpty()
                                 stockViewModel.markItemsUploaded(itemsForUpload)
-                                showStockUploadSuccessNotification(
-                                    context = context,
-                                    title = "Stock Upload Successful",
-                                    message = "${itemsForUpload.size} items uploaded."
-                                )
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                 showChooseDeviceDialog = false
                                 pendingUploadItems = emptyList()
+                                showUploadSuccessDialog = true
                             } else {
                                 val err = result.exceptionOrNull()
                                 Toast.makeText(context, err?.message ?: "Upload failed.", Toast.LENGTH_LONG).show()
@@ -696,9 +789,9 @@ fun ViewStockCardScreen(
                         colors = stockOutlinedTextFieldColors()
                     )
                     OutlinedTextField(
-                        value = selectedGroup.sid,
+                        value = selectedGroup.stockName.ifBlank { "-" },
                         onValueChange = {},
-                        label = { Text("SID") },
+                        label = { Text("Stock") },
                         enabled = false,
                         colors = stockOutlinedTextFieldColors()
                     )
@@ -710,10 +803,16 @@ fun ViewStockCardScreen(
                         val oldKey = selectedGroup.toKey()
                         stockViewModel.updateTableLocation(
                             oldLocation = selectedGroup.location,
-                            oldSid = selectedGroup.sid,
+                            stockName = selectedGroup.stockName,
+                            identifierKey = selectedGroup.identifierKey,
                             newLocation = updateLocation.trim()
                         )
-                        val newKey = listOf(selectedGroup.ownerUid, updateLocation.trim(), selectedGroup.sid).joinToString("|")
+                        val newKey = listOf(
+                            selectedGroup.ownerUid,
+                            updateLocation.trim(),
+                            selectedGroup.stockName,
+                            selectedGroup.identifierKey
+                        ).joinToString("|")
                         if (openedGroupKey == oldKey) openedGroupKey = newKey
                         selectedGroupKeys = (selectedGroupKeys - oldKey) + newKey
                         showUpdateGroupDialog = false
@@ -738,6 +837,26 @@ fun ViewStockCardScreen(
             textContentColor = StockAppColors.TextSecondary
         )
     }
+
+    if (showUploadSuccessDialog) {
+        AlertDialog(
+            onDismissRequest = { showUploadSuccessDialog = false },
+            title = { Text("Upload Status", color = StockAppColors.TextPrimary) },
+            text = {
+                Text(
+                    text = "Stock data uploaded successfully",
+                    color = StockAppColors.TextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showUploadSuccessDialog = false }) {
+                    Text("OK", color = StockAppColors.AccentCyan)
+                }
+            },
+            containerColor = StockAppColors.CardSurface,
+            titleContentColor = StockAppColors.TextPrimary,
+            textContentColor = StockAppColors.TextSecondary
+        )
     }
 }
 
@@ -805,88 +924,47 @@ private fun UploadDeviceRow(
     }
 }
 
-@Composable
-private fun LazyListScrollbar(
-    state: LazyListState,
-    modifier: Modifier = Modifier
-) {
-    val density = LocalDensity.current
-    val minThumbHeightPx = with(density) { 36.dp.toPx() }
-    val metrics by remember(state, minThumbHeightPx) {
-        derivedStateOf {
-            val layoutInfo = state.layoutInfo
-            val viewportHeightPx = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(0)
-            if (viewportHeightPx == 0) return@derivedStateOf null
+private fun InventoryGroup.toKey(): String = listOf(
+    ownerUid,
+    location,
+    stockName,
+    identifierKey
+).joinToString("|")
 
-            val visibleItems = layoutInfo.visibleItemsInfo
-            val averageItemHeightPx = if (visibleItems.isNotEmpty()) {
-                var sum = 0
-                for (item in visibleItems) {
-                    sum += item.size
-                }
-                sum.toFloat() / visibleItems.size
-            } else {
-                viewportHeightPx.toFloat()
-            }
-            val estimatedContentHeightPx = if (layoutInfo.totalItemsCount > 0) {
-                averageItemHeightPx * layoutInfo.totalItemsCount
-            } else {
-                viewportHeightPx.toFloat()
-            }.coerceAtLeast(viewportHeightPx.toFloat())
-            val firstVisibleItem = visibleItems.firstOrNull()
-            val scrollOffsetPx = if (firstVisibleItem != null) {
-                (firstVisibleItem.index * averageItemHeightPx - firstVisibleItem.offset).coerceAtLeast(0f)
-            } else {
-                0f
-            }
-            val thumbHeightPx = if (estimatedContentHeightPx == 0f) {
-                viewportHeightPx.toFloat()
-            } else {
-                ((viewportHeightPx.toFloat() / estimatedContentHeightPx) * viewportHeightPx)
-                    .coerceIn(minThumbHeightPx, viewportHeightPx.toFloat())
-            }
-            val maxThumbOffsetPx = (viewportHeightPx - thumbHeightPx).coerceAtLeast(0f)
-            val maxScrollPx = (estimatedContentHeightPx - viewportHeightPx).coerceAtLeast(1f)
-            val thumbOffsetPx = if (maxThumbOffsetPx == 0f) {
-                0f
-            } else {
-                (scrollOffsetPx / maxScrollPx).coerceIn(0f, 1f) * maxThumbOffsetPx
-            }
-
-            ScrollbarMetrics(thumbHeightPx = thumbHeightPx, thumbOffsetPx = thumbOffsetPx)
-        }
-    }
-    val resolvedMetrics = metrics ?: return
-
-    Box(
-        modifier = modifier
-            .width(7.dp)
-            .fillMaxHeight()
-            .clip(RoundedCornerShape(50))
-            .background(StockAppColors.CardBorder)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(with(density) { resolvedMetrics.thumbHeightPx.toDp() })
-                .offset { IntOffset(0, resolvedMetrics.thumbOffsetPx.roundToInt()) }
-                .clip(RoundedCornerShape(50))
-                .background(StockAppColors.AccentCyan.copy(alpha = 0.7f))
-        )
-    }
-}
-
-private data class ScrollbarMetrics(
-    val thumbHeightPx: Float,
-    val thumbOffsetPx: Float
+private data class TableRenderData(
+    val columns: List<String>,
+    val rowValuesByItemId: Map<String, List<String>>
 )
 
-private fun InventoryGroup.toKey(): String = listOf(ownerUid, location, sid).joinToString("|")
+private fun buildTableRenderData(items: List<StockItem>): TableRenderData {
+    if (items.isEmpty()) {
+        return TableRenderData(
+            columns = DEFAULT_TABLE_COLUMNS,
+            rowValuesByItemId = emptyMap()
+        )
+    }
 
-private fun resolveTableColumns(items: List<StockItem>): List<String> {
-    val parsedFieldSets = items
-        .map { JsonFieldExtractor.extractAllFields(it.variableData) }
-        .filter { it.isNotEmpty() }
+    val parsedFieldsByItemId = LinkedHashMap<String, Map<String, String>>(items.size)
+    val parsedFieldSets = ArrayList<Map<String, String>>(items.size)
+    for (item in items) {
+        val fields = JsonFieldExtractor.extractAllFields(item.variableData)
+        parsedFieldsByItemId[item.id] = fields
+        if (fields.isNotEmpty()) {
+            parsedFieldSets.add(fields)
+        }
+    }
+
+    val columns = resolveTableColumns(parsedFieldSets)
+    val rowValuesByItemId = LinkedHashMap<String, List<String>>(items.size)
+    for (item in items) {
+        val fields = parsedFieldsByItemId[item.id].orEmpty()
+        rowValuesByItemId[item.id] = columns.map { column -> resolveTableValue(fields, column) }
+    }
+
+    return TableRenderData(columns = columns, rowValuesByItemId = rowValuesByItemId)
+}
+
+private fun resolveTableColumns(parsedFieldSets: List<Map<String, String>>): List<String> {
 
     val preferred = parsedFieldSets
         .firstOrNull()
@@ -954,13 +1032,13 @@ private fun InventoryGroupRowCard(
             }
             .border(
                 width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) StockAppColors.AccentCyan else StockAppColors.CardBorder,
+                color = if (isSelected) StockAppColors.AccentCyan.copy(alpha = 0.7f) else StockAppColors.CardBorder,
                 shape = cardShape
             ),
         shape = cardShape,
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                StockAppColors.AccentCyan.copy(alpha = 0.14f)
+                StockAppColors.AccentCyan
             } else {
                 StockAppColors.CardSurface
             }
@@ -1001,12 +1079,12 @@ private fun InventoryGroupRowCard(
                 fontSize = 12.sp
             )
             Text(
-                text = "SID: ${group.sid}",
+                text = "Location: ${group.location}",
                 color = StockAppColors.TextSecondary,
                 fontSize = 12.sp
             )
             Text(
-                text = "Location: ${group.location}",
+                text = "Stock: ${group.stockName.ifBlank { "-" }}",
                 color = StockAppColors.TextSecondary,
                 fontSize = 12.sp
             )
@@ -1045,8 +1123,8 @@ private fun TableIdentityHeader(group: InventoryGroup) {
             modifier = Modifier.weight(1f)
         )
         TableIdentityValue(
-            label = "SID",
-            value = group.sid,
+            label = "Stock",
+            value = group.stockName,
             modifier = Modifier.weight(1f)
         )
         TableIdentityValue(

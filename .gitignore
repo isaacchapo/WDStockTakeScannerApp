@@ -1,5 +1,6 @@
 # Gradle
 .gradle/
+.gradle-user/
 **/build/
 
 # Local configuration
@@ -23,3 +24,6 @@ captures/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local tool metadata
+.grok/

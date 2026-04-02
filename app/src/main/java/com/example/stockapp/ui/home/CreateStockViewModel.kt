@@ -16,7 +16,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.security.SecureRandom
 import java.util.Locale
 
 class CreateStockViewModel(
@@ -36,7 +35,7 @@ class CreateStockViewModel(
 
     private val _scannedItems = MutableStateFlow<List<StockItem>>(emptyList())
     val scannedItems = _scannedItems.asStateFlow()
-    private val _currentSid = MutableStateFlow(generateSid())
+    private val _currentSid = MutableStateFlow("")
     val currentSid = _currentSid.asStateFlow()
     private val _savedLocations = MutableStateFlow<List<SavedLocation>>(emptyList())
     val savedLocations = _savedLocations.asStateFlow()
@@ -46,12 +45,21 @@ class CreateStockViewModel(
     private var lastAcceptedAtMs: Long = 0L
     private val seenScanFingerprints = linkedSetOf<String>()
     private val scanMutex = Mutex()
+    private var nextSidCounter: Int? = null
 
     init {
         viewModelScope.launch {
             repository.getSavedLocations(ownerUid).collectLatest { locations ->
                 _savedLocations.value = locations
             }
+        }
+        viewModelScope.launch {
+            if (ownerUid.isBlank()) return@launch
+            val nextSid = runCatching {
+                computeNextSidCounter()
+            }.getOrElse { 1 }
+            nextSidCounter = nextSid
+            _currentSid.value = formatSid(nextSid)
         }
     }
 
@@ -69,12 +77,12 @@ class CreateStockViewModel(
 
     private suspend fun addScannedItemInternal(barcode: String): ScanAddResult {
         val cleanedBarcode = barcode.trim()
-        Log.d("Scanner", "Processing barcode: '$cleanedBarcode'")
+        logScannerDebug("Processing barcode")
 
         val nowMs = SystemClock.elapsedRealtime()
         // Ignore only immediate scanner bounce repeats from a single trigger pull.
         if (cleanedBarcode == lastAcceptedRawScan && nowMs - lastAcceptedAtMs < 250L) {
-            Log.d("Scanner", "Ignoring duplicate scan payload")
+            logScannerDebug("Ignoring duplicate scan payload")
             return ScanAddResult(
                 accepted = false,
                 message = "Duplicate scan ignored."
@@ -85,37 +93,44 @@ class CreateStockViewModel(
             QrDataParser.parseQrData(cleanedBarcode)
         }
         if (parsedData == null) {
-            Log.e("Scanner", "Error decoding barcode JSON. Raw data: '$cleanedBarcode'")
+            Log.e("Scanner", "Error decoding barcode JSON.")
             return ScanAddResult(
                 accepted = false,
                 message = "Invalid QR payload. Scan a valid product QR code."
             )
         }
 
+        val missingTableRules = QrDataParser.getMissingRequiredTableRules(parsedData.fields)
+        if (missingTableRules.isNotEmpty()) {
+            val missingLabel = missingTableRules.joinToString(", ")
+            logScannerDebug("Rejected scan missing required table rules")
+            return ScanAddResult(
+                accepted = false,
+                message = "QR code missing required fields: $missingLabel."
+            )
+        }
+        val orderNo = QrDataParser.getOrderNo(parsedData.fields)
+
         val fingerprint = withContext(Dispatchers.Default) {
             buildScanFingerprint(parsedData.fields, parsedData.variableData)
         }
         if (fingerprint.isNotBlank() && seenScanFingerprints.contains(fingerprint)) {
-            Log.d("Scanner", "Ignoring already buffered QR values")
+            logScannerDebug("Ignoring already buffered QR values")
             return ScanAddResult(
                 accepted = false,
                 message = "Duplicate QR values ignored."
             )
         }
 
-        val activeSid = _currentSid.value.ifBlank {
-            val generated = generateSid()
-            _currentSid.value = generated
-            generated
-        }
+        val assignedSid = assignNextSid()
 
         val scannedItem = StockItem(
-            sid = activeSid,
+            sid = assignedSid,
             identifierKey = buildIdentifierKey(
                 fields = parsedData.fields,
                 fallbackPayload = parsedData.variableData
             ),
-            orderNo = null,
+            orderNo = orderNo,
             location = "",
             dateScanned = System.currentTimeMillis(),
             variableData = parsedData.variableData,
@@ -128,7 +143,7 @@ class CreateStockViewModel(
         }
         lastAcceptedRawScan = cleanedBarcode
         lastAcceptedAtMs = nowMs
-        Log.d("Scanner", "Staged item in temporary scan list")
+        logScannerDebug("Staged item in temporary scan list")
         return ScanAddResult(accepted = true)
     }
 
@@ -149,10 +164,8 @@ class CreateStockViewModel(
             return
         }
         val tempItems = _scannedItems.value
-        val activeSid = _currentSid.value
         if (
-            tempItems.isEmpty() ||
-            activeSid.isBlank()
+            tempItems.isEmpty()
         ) {
             onComplete(ConfirmSaveResult(success = false))
             return
@@ -171,15 +184,11 @@ class CreateStockViewModel(
                         .toHashSet()
                     val existingLocation = savedLocationsSnapshot
                         .firstOrNull { it.locationNormalized == normalizedLocation }
-                    val sessionSid = existingLocation?.sid
-                        ?.takeIf { it.isNotBlank() }
-                        ?: activeSid
                     val locationDisplayName = existingLocation?.location ?: location.trim()
                     val stockNameDisplayName = trimmedStockName
 
                     val itemsToSave = tempItems.map { item ->
                         item.copy(
-                            sid = sessionSid,
                             identifierKey = buildIdentifierKeyFromItem(item),
                             location = locationDisplayName,
                             stockName = stockNameDisplayName,
@@ -202,8 +211,13 @@ class CreateStockViewModel(
                         }
                     }
 
+                    val locationSid = newItemsToSave.lastOrNull()?.sid
+                        ?.takeIf { it.isNotBlank() }
+                        ?: tempItems.lastOrNull()?.sid
+                        ?: existingLocation?.sid.orEmpty()
+
                     PreparedSaveResult(
-                        sessionSid = sessionSid,
+                        locationSid = locationSid,
                         locationDisplayName = locationDisplayName,
                         newItemsToSave = newItemsToSave,
                         duplicateCount = duplicateCount
@@ -216,7 +230,7 @@ class CreateStockViewModel(
                             ownerUid = ownerUid,
                             locationNormalized = normalizedLocation,
                             location = prepared.locationDisplayName,
-                            sid = prepared.sessionSid
+                            sid = prepared.locationSid
                         )
                     )
 
@@ -301,10 +315,10 @@ class CreateStockViewModel(
 
     private fun resetActiveScanSession() {
         _scannedItems.value = emptyList()
-        _currentSid.value = generateSid()
         lastAcceptedRawScan = ""
         lastAcceptedAtMs = 0L
         seenScanFingerprints.clear()
+        _currentSid.value = nextSidCounter?.let(::formatSid).orEmpty()
     }
 
     private fun rebuildScanFingerprints(items: List<StockItem>) {
@@ -395,25 +409,56 @@ class CreateStockViewModel(
         return normalizeFingerprintValue(fallbackPayload).ifBlank { "data" }
     }
 
-    private fun generateSid(length: Int = 6): String {
-        return buildString(length) {
-            repeat(length) {
-                append(SID_ALPHABET[sidRandom.nextInt(SID_ALPHABET.length)])
-            }
+    private suspend fun computeNextSidCounter(): Int {
+        val maxSid = repository.getMaxNumericSid(ownerUid) ?: 0
+        return (maxSid + 1).coerceAtLeast(1)
+    }
+
+    private fun formatSid(value: Int): String {
+        return String.format(Locale.ROOT, "%04d", value.coerceAtLeast(0))
+    }
+
+    private suspend fun ensureCurrentSid(): String {
+        if (nextSidCounter == null) {
+            val nextSid = runCatching {
+                computeNextSidCounter()
+            }.getOrElse { 1 }
+            nextSidCounter = nextSid
+            _currentSid.value = formatSid(nextSid)
         }
+
+        val current = nextSidCounter ?: 1
+        val formatted = formatSid(current)
+        if (_currentSid.value != formatted) {
+            _currentSid.value = formatted
+        }
+        return formatted
+    }
+
+    private suspend fun assignNextSid(): String {
+        val assigned = ensureCurrentSid()
+        val updated = (nextSidCounter ?: 1) + 1
+        nextSidCounter = updated
+        _currentSid.value = formatSid(updated)
+        return assigned
     }
 
     private data class PreparedSaveResult(
-        val sessionSid: String,
+        val locationSid: String,
         val locationDisplayName: String,
         val newItemsToSave: List<StockItem>,
         val duplicateCount: Int
     )
 
     private companion object {
-        const val SID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        const val ENABLE_SCANNER_DEBUG_LOGS = false
         val WHITESPACE_REGEX = Regex("\\s+")
         val KEY_SYMBOL_REGEX = Regex("[^a-z0-9]")
-        val sidRandom = SecureRandom()
+    }
+
+    private fun logScannerDebug(message: String) {
+        if (ENABLE_SCANNER_DEBUG_LOGS) {
+            Log.d("Scanner", message)
+        }
     }
 }

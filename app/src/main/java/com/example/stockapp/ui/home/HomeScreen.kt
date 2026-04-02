@@ -31,17 +31,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.stockapp.R
-import com.example.stockapp.ui.common.StockAppBackground
-import com.example.stockapp.ui.common.ScreenAppear
+import com.example.stockapp.ui.common.FooterBranding
 import com.example.stockapp.ui.common.StockAppColors
 import com.example.stockapp.ui.common.StockAppTopBar
 
@@ -53,76 +47,72 @@ fun HomeScreen(
     onShare: () -> Unit,
     onLogout: () -> Unit
 ) {
-    StockAppBackground {
-        ScreenAppear {
-            Column(modifier = Modifier.fillMaxSize()) {
-                StockAppTopBar(title = "STOCK TAKE", logoResId = R.drawable.logo)
+    Column(modifier = Modifier.fillMaxSize()) {
+        StockAppTopBar(title = "STOCK TAKE", logoResId = R.drawable.logo)
 
-                Column(
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = 20.dp, vertical = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            UserInfoCard(loggedInUser = loggedInUser)
+            Spacer(modifier = Modifier.height(28.dp))
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                HomeCard(
+                    text = "Create Stock Take",
+                    subtitle = null,
+                    icon = Icons.Filled.QrCodeScanner,
+                    onClick = onCreateStockCard
+                )
+                HomeCard(
+                    text = "View Stock Take",
+                    subtitle = null,
+                    icon = Icons.Filled.Visibility,
+                    onClick = onViewStockCard
+                )
+                HomeCard(
+                    text = "Share",
+                    subtitle = null,
+                    icon = Icons.Filled.Share,
+                    onClick = onShare
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            OutlinedButton(
+                onClick = onLogout,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = StockAppColors.CardSurface,
+                    contentColor = StockAppColors.AccentAmber,
+                    disabledContainerColor = StockAppColors.DisabledSurface,
+                    disabledContentColor = StockAppColors.DisabledText
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Logout,
+                    contentDescription = "Logout",
+                    tint = StockAppColors.AccentAmber,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(horizontal = 20.dp, vertical = 22.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    UserInfoCard(loggedInUser = loggedInUser)
-                    Spacer(modifier = Modifier.height(28.dp))
-
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        HomeCard(
-                            text = "Create Stock Take",
-                            subtitle = null,
-                            icon = Icons.Filled.QrCodeScanner,
-                            onClick = onCreateStockCard
-                        )
-                        HomeCard(
-                            text = "View Stock Take",
-                            subtitle = null,
-                            icon = Icons.Filled.Visibility,
-                            onClick = onViewStockCard
-                        )
-                        HomeCard(
-                            text = "Share",
-                            subtitle = null,
-                            icon = Icons.Filled.Share,
-                            onClick = onShare
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    OutlinedButton(
-                        onClick = onLogout,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = StockAppColors.CardSurface,
-                            contentColor = StockAppColors.AccentAmber,
-                            disabledContainerColor = StockAppColors.DisabledSurface,
-                            disabledContentColor = StockAppColors.DisabledText
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Logout,
-                            contentDescription = "Logout",
-                            tint = StockAppColors.AccentAmber,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .padding(end = 6.dp)
-                        )
-                        Text(
-                            text = "Logout",
-                            color = StockAppColors.AccentAmber,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                FooterBranding()
+                        .size(20.dp)
+                        .padding(end = 6.dp)
+                )
+                Text(
+                    text = "Logout",
+                    color = StockAppColors.AccentAmber,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
+
+        FooterBranding()
     }
 }
 
@@ -247,65 +237,5 @@ private fun UserInfoCard(loggedInUser: String) {
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun FooterBranding() {
-    val uriHandler = LocalUriHandler.current
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "www.webdevzm.tech",
-                modifier = Modifier.clickable {
-                    uriHandler.openUri("https://www.webdevzm.tech")
-                },
-                color = StockAppColors.AccentCyan,
-                textAlign = TextAlign.Center,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                fontFamily = FontFamily.SansSerif
-            )
-            Text(
-                text = " | Contact: ",
-                color = StockAppColors.TextSecondary,
-                textAlign = TextAlign.Center,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                fontFamily = FontFamily.SansSerif
-            )
-            Text(
-                text = "0960911672",
-                modifier = Modifier.clickable {
-                    uriHandler.openUri("tel:0960911672")
-                },
-                color = StockAppColors.AccentAmber,
-                textAlign = TextAlign.Center,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.SansSerif
-            )
-        }
-        Text(
-            text = "Developed By Webdev Technologies",
-            color = StockAppColors.TextSecondary,
-            textAlign = TextAlign.Center,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Serif,
-            fontStyle = FontStyle.Italic,
-            letterSpacing = 0.2.sp
-        )
     }
 }

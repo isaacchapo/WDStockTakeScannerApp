@@ -14,7 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -60,6 +60,7 @@ fun TidyTextField(
             enabled = enabled,
             visualTransformation = visualTransformation,
             keyboardOptions = keyboardOptions,
+            cursorBrush = SolidColor(StockAppColors.AccentCyan),
             textStyle = TextStyle(
                 fontSize = 14.sp,
                 color = if (enabled) StockAppColors.TextPrimary else StockAppColors.DisabledText

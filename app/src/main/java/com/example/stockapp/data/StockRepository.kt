@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.Locale
 
@@ -42,8 +43,13 @@ class StockRepository(
             stockItemDao.getAllStockItemsSnapshot(ownerUid)
         }
 
+    suspend fun getMaxNumericSid(ownerUid: String): Int? =
+        withContext(ioDispatcher) {
+            stockItemDao.getMaxNumericSid(ownerUid)
+        }
+
     /**
-     * A flow of table groups (UID + location + SID).
+     * A flow of stock cards grouped by location + stock name + table rules.
      */
     fun getInventoryGroups(ownerUid: String): Flow<List<InventoryGroup>> = stockItemDao.getInventoryGroups(ownerUid)
 
@@ -106,14 +112,23 @@ class StockRepository(
     }
 
     /**
-     * @return a flow of all records for a selected table group (SID + UID + location).
+     * @return a flow of all records for a selected stock card.
      */
     fun getItemsForTable(
         ownerUid: String,
         location: String,
-        sid: String
+        stockName: String,
+        identifierKey: String
     ): Flow<List<StockItem>> {
-        return stockItemDao.getItemsForTable(ownerUid, location, sid)
+        return stockItemDao.getItemsForTable(ownerUid, location, stockName, identifierKey)
+    }
+
+    fun getItemsForTableAllSchemas(
+        ownerUid: String,
+        location: String,
+        stockName: String
+    ): Flow<List<StockItem>> {
+        return stockItemDao.getItemsForTableAllSchemas(ownerUid, location, stockName)
     }
 
     /**
@@ -142,13 +157,19 @@ class StockRepository(
     suspend fun updateTableLocation(
         ownerUid: String,
         oldLocation: String,
-        oldSid: String,
+        stockName: String,
+        identifierKey: String,
         newLocation: String
     ) {
         withContext(ioDispatcher) {
             val normalizedOldLocation = normalizeLocation(oldLocation)
             val normalizedNewLocation = normalizeLocation(newLocation)
             val trimmedNewLocation = newLocation.trim()
+            val oldSavedLocation = if (normalizedOldLocation.isBlank()) {
+                null
+            } else {
+                savedLocationDao.getSavedLocation(ownerUid, normalizedOldLocation)
+            }
 
             val existingSavedLocation = if (normalizedNewLocation.isBlank()) {
                 null
@@ -161,17 +182,21 @@ class StockRepository(
             stockItemDao.updateTableLocation(
                 ownerUid,
                 oldLocation,
-                oldSid,
+                stockName,
+                identifierKey,
                 locationLabel
             )
 
             if (normalizedNewLocation.isNotBlank()) {
+                val resolvedSid = existingSavedLocation?.sid
+                    ?.takeIf { it.isNotBlank() }
+                    ?: oldSavedLocation?.sid.orEmpty()
                 savedLocationDao.upsert(
                     SavedLocation(
                         ownerUid = ownerUid,
                         locationNormalized = normalizedNewLocation,
                         location = locationLabel,
-                        sid = oldSid
+                        sid = resolvedSid
                     )
                 )
             }
@@ -185,10 +210,11 @@ class StockRepository(
     suspend fun deleteTableGroup(
         ownerUid: String,
         location: String,
-        sid: String
+        stockName: String,
+        identifierKey: String
     ) {
         withContext(ioDispatcher) {
-            stockItemDao.deleteTableGroup(ownerUid, location, sid)
+            stockItemDao.deleteTableGroup(ownerUid, location, stockName, identifierKey)
             deleteSavedLocationIfUnused(ownerUid, normalizeLocation(location))
         }
     }
@@ -340,6 +366,7 @@ class StockRepository(
 }
 
 private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
+    val resolvedUid = ownerUid.ifBlank { this.ownerUid }
     return StockUploadItemDto(
         id = id,
         sid = sid,
@@ -348,7 +375,38 @@ private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
         location = location,
         stockName = stockName,
         dateScanned = dateScanned,
-        variableData = variableData,
-        ownerUid = ownerUid
+        variableData = enrichVariableData(variableData, sid, resolvedUid),
+        ownerUid = resolvedUid
     )
+}
+
+private fun enrichVariableData(variableData: String, sid: String, uid: String): String {
+    if (variableData.isBlank()) return variableData
+    if (sid.isBlank() && uid.isBlank()) return variableData
+
+    return runCatching {
+        val json = JSONObject(variableData)
+        val normalizedKeys = mutableSetOf<String>()
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            normalizedKeys.add(normalizeColumnKey(key))
+        }
+
+        if (sid.isNotBlank() && "sid" !in normalizedKeys) {
+            json.put("SID", sid)
+        }
+        if (uid.isNotBlank() && "uid" !in normalizedKeys && "owneruid" !in normalizedKeys) {
+            json.put("UID", uid)
+        }
+
+        json.toString()
+    }.getOrElse { variableData }
+}
+
+private fun normalizeColumnKey(raw: String): String {
+    return raw
+        .trim()
+        .lowercase(Locale.ROOT)
+        .replace(Regex("[^a-z0-9]"), "")
 }

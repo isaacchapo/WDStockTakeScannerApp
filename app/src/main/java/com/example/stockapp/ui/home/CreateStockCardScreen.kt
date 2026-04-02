@@ -77,6 +77,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -92,10 +93,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.stockapp.StockApplication
+import com.example.stockapp.data.JsonFieldExtractor
 import com.example.stockapp.data.QrDataParser
 import com.example.stockapp.data.local.SavedLocation
-import com.example.stockapp.ui.common.StockAppBackground
-import com.example.stockapp.ui.common.ScreenAppear
+import com.example.stockapp.data.local.StockItem
 import com.example.stockapp.ui.common.StockAppColors
 import com.example.stockapp.ui.common.stockOutlinedTextFieldColors
 import java.text.SimpleDateFormat
@@ -144,6 +145,7 @@ private val SCAN_DATA_EXTRA_KEYS = listOf(
 )
 
 private val DEFAULT_PREVIEW_COLUMNS = listOf("FIELD1", "FIELD2", "FIELD3", "FIELD4")
+private val EMPTY_PREVIEW_VALUES = listOf("-", "-", "-", "-")
 
 // Intent actions to trigger hardware scanners on various industrial devices
 private const val ACTION_SCANNER_SOFT_TRIGGER = "com.android.serial.BARCODE_READ_ACTION"
@@ -198,16 +200,9 @@ fun CreateStockCardScreen(
 
     var location by remember { mutableStateOf("") }
     val actionButtonWidth = 126.dp
-    val normalizedLocationInput by remember {
-        derivedStateOf { location.trim().lowercase(Locale.ROOT) }
-    }
     val displaySid by remember {
         derivedStateOf {
-            savedLocations
-                .firstOrNull { it.locationNormalized == normalizedLocationInput }
-                ?.sid
-                ?.takeIf { it.isNotBlank() }
-                ?: currentSid
+            currentSid.ifBlank { "-" }
         }
     }
 
@@ -300,13 +295,11 @@ fun CreateStockCardScreen(
         }
     )
 
-    StockAppBackground {
-        ScreenAppear {
-            Box(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    CreateStockTopBar(onBack = { requestExitNavigation() })
+    Box(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            CreateStockTopBar(onBack = { requestExitNavigation() })
 
                 Column(
                     modifier = Modifier
@@ -402,14 +395,16 @@ fun CreateStockCardScreen(
                         colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
                         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                     ) {
-                        val previewColumns by produceState(
-                            initialValue = DEFAULT_PREVIEW_COLUMNS,
+                        val previewTableData by produceState(
+                            initialValue = PreviewTableData(DEFAULT_PREVIEW_COLUMNS, emptyMap()),
                             scannedItems
                         ) {
                             value = withContext(Dispatchers.Default) {
-                                resolvePreviewColumns(scannedItems)
+                                buildPreviewTableData(scannedItems)
                             }
                         }
+                        val previewColumns = previewTableData.columns
+                        val rowValuesByItemId = previewTableData.rowValuesByItemId
 
                     Box(
                         modifier = Modifier
@@ -541,9 +536,7 @@ fun CreateStockCardScreen(
                                         key = { _, item -> item.id }
                                     ) { index, item ->
                                         val isSelected = selectedScannedItemId == item.id
-                                        val itemFields = remember(item.variableData) {
-                                            com.example.stockapp.data.JsonFieldExtractor.extractAllFields(item.variableData)
-                                        }
+                                        val rowValues = rowValuesByItemId[item.id] ?: EMPTY_PREVIEW_VALUES
                                         val positionModifier = if (isSelected) {
                                             Modifier.onGloballyPositioned { coordinates ->
                                                 val rowPosition = coordinates.positionInRoot()
@@ -596,25 +589,25 @@ fun CreateStockCardScreen(
                                                     color = StockAppColors.TextPrimary
                                                 )
                                                 Text(
-                                                    resolvePreviewValue(itemFields, previewColumns[0]),
+                                                    rowValues.getOrElse(0) { "-" },
                                                     modifier = Modifier.weight(1f),
                                                     fontSize = 11.sp,
                                                     color = StockAppColors.TextPrimary
                                                 )
                                                 Text(
-                                                    resolvePreviewValue(itemFields, previewColumns[1]),
+                                                    rowValues.getOrElse(1) { "-" },
                                                     modifier = Modifier.weight(1f),
                                                     fontSize = 11.sp,
                                                     color = StockAppColors.TextPrimary
                                                 )
                                                 Text(
-                                                    resolvePreviewValue(itemFields, previewColumns[2]),
+                                                    rowValues.getOrElse(2) { "-" },
                                                     modifier = Modifier.weight(1f),
                                                     fontSize = 11.sp,
                                                     color = StockAppColors.TextPrimary
                                                 )
                                                 Text(
-                                                    resolvePreviewValue(itemFields, previewColumns[3]),
+                                                    rowValues.getOrElse(3) { "-" },
                                                     modifier = Modifier.weight(1f),
                                                     fontSize = 11.sp,
                                                     textAlign = TextAlign.End,
@@ -734,7 +727,6 @@ fun CreateStockCardScreen(
                     }
                 }
             }
-        }
     }
 
     if (showStockNamePrompt) {
@@ -899,7 +891,7 @@ fun CreateStockCardScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Do you want to proceed with this action? You will cancel the current stock session",
+                        text = "Do you want to proceed with this action? You will cancel the current stock session.",
                         color = StockAppColors.TextPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -945,7 +937,6 @@ fun CreateStockCardScreen(
             }
             }
         }
-    }
 }
 
 @Composable
@@ -1055,7 +1046,7 @@ private fun StockNamePrompt(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(StockAppColors.Veil)
+            .background(Color.Black.copy(alpha = 0.85f))
             .clickable(
                 interactionSource = interactionSource,
                 indication = null
@@ -1147,6 +1138,7 @@ private fun LocationEntryCard(
                 onValueChange = onLocationChange,
                 enabled = enabled,
                 singleLine = true,
+                cursorBrush = SolidColor(StockAppColors.AccentCyan),
                 modifier = Modifier.weight(1f),
                 textStyle = TextStyle(
                     fontSize = 14.sp,
@@ -1322,7 +1314,6 @@ private fun CreateStockTopBar(onBack: () -> Unit) {
             onClick = onBack,
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .background(StockAppColors.AccentCyan.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
                 .size(34.dp)
         ) {
             Icon(
@@ -1501,10 +1492,40 @@ private fun AimerScannerBroadcastEffect(
     }
 }
 
-private fun resolvePreviewColumns(items: List<com.example.stockapp.data.local.StockItem>): List<String> {
-    val parsedFieldSets = items
-        .map { com.example.stockapp.data.JsonFieldExtractor.extractAllFields(it.variableData) }
-        .filter { it.isNotEmpty() }
+private data class PreviewTableData(
+    val columns: List<String>,
+    val rowValuesByItemId: Map<String, List<String>>
+)
+
+private fun buildPreviewTableData(items: List<StockItem>): PreviewTableData {
+    if (items.isEmpty()) {
+        return PreviewTableData(
+            columns = DEFAULT_PREVIEW_COLUMNS,
+            rowValuesByItemId = emptyMap()
+        )
+    }
+
+    val parsedFieldsByItemId = LinkedHashMap<String, Map<String, String>>(items.size)
+    val parsedFieldSets = ArrayList<Map<String, String>>(items.size)
+    for (item in items) {
+        val fields = JsonFieldExtractor.extractAllFields(item.variableData)
+        parsedFieldsByItemId[item.id] = fields
+        if (fields.isNotEmpty()) {
+            parsedFieldSets.add(fields)
+        }
+    }
+
+    val columns = resolvePreviewColumns(parsedFieldSets)
+    val rowValuesByItemId = LinkedHashMap<String, List<String>>(items.size)
+    for (item in items) {
+        val fields = parsedFieldsByItemId[item.id].orEmpty()
+        rowValuesByItemId[item.id] = columns.map { column -> resolvePreviewValue(fields, column) }
+    }
+
+    return PreviewTableData(columns = columns, rowValuesByItemId = rowValuesByItemId)
+}
+
+private fun resolvePreviewColumns(parsedFieldSets: List<Map<String, String>>): List<String> {
 
     val preferred = parsedFieldSets
         .firstOrNull()

@@ -128,10 +128,6 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         }
     }
 
-    fun setActiveUser(uid: String) {
-        _activeUserUid.value = uid.trim().ifBlank { null }
-    }
-
     fun clearActiveUser() {
         _activeUserUid.value = null
     }
@@ -145,19 +141,29 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
 
     fun getItemsForTable(
         location: String,
-        sid: String
+        stockName: String,
+        identifierKey: String
     ): Flow<List<StockItem>> {
         val ownerUid = _activeUserUid.value ?: return flowOf(emptyList())
-        return repository.getItemsForTable(ownerUid, location, sid)
+        return repository.getItemsForTable(ownerUid, location, stockName, identifierKey)
+    }
+
+    fun getItemsForTableAllSchemas(
+        location: String,
+        stockName: String
+    ): Flow<List<StockItem>> {
+        val ownerUid = _activeUserUid.value ?: return flowOf(emptyList())
+        return repository.getItemsForTableAllSchemas(ownerUid, location, stockName)
     }
 
     suspend fun getItemsForTableSnapshot(
         location: String,
-        sid: String
+        stockName: String,
+        identifierKey: String
     ): List<StockItem> {
         val ownerUid = _activeUserUid.value ?: return emptyList()
         return repository
-            .getItemsForTable(ownerUid, location, sid)
+            .getItemsForTable(ownerUid, location, stockName, identifierKey)
             .first()
     }
 
@@ -211,24 +217,27 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
 
     fun updateTableLocation(
         oldLocation: String,
-        oldSid: String,
+        stockName: String,
+        identifierKey: String,
         newLocation: String
     ) = viewModelScope.launch {
         val ownerUid = _activeUserUid.value ?: return@launch
         repository.updateTableLocation(
             ownerUid,
             oldLocation,
-            oldSid,
+            stockName,
+            identifierKey,
             newLocation
         )
     }
 
     fun deleteTableGroup(
         location: String,
-        sid: String
+        stockName: String,
+        identifierKey: String
     ) = viewModelScope.launch {
         val ownerUid = _activeUserUid.value ?: return@launch
-        repository.deleteTableGroup(ownerUid, location, sid)
+        repository.deleteTableGroup(ownerUid, location, stockName, identifierKey)
     }
 
     fun updateStockItem(stockItem: StockItem) = viewModelScope.launch {

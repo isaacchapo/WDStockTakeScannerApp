@@ -28,6 +28,7 @@ class StockUploadClient {
     private companion object {
         const val TAG = "StockUploadClient"
         const val HOST_REACHABILITY_TIMEOUT_MS = 4000
+        const val ENABLE_UPLOAD_DEBUG_LOGS = false
     }
 
     private val gson = Gson()
@@ -129,9 +130,10 @@ class StockUploadClient {
 
             // Upload items one by one because the server expects a single object, not an array
             items.forEachIndexed { index, item ->
-                val jsonPayload = gson.toJson(item)
-                Log.d(TAG, "Uploading item ${index + 1}/${items.size} to $uploadUrl")
-                Log.d(TAG, "Payload: $jsonPayload")
+                if (ENABLE_UPLOAD_DEBUG_LOGS) {
+                    Log.d(TAG, "Uploading item ${index + 1}/${items.size} to $uploadUrl")
+                    Log.d(TAG, "Payload: ${gson.toJson(item)}")
+                }
 
                 val itemResult = uploadSingleWithRetry(
                     uploadUrl = uploadUrl,

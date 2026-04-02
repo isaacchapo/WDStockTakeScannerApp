@@ -35,12 +35,20 @@ interface StockItemDao {
     @Query("SELECT * FROM stock_table WHERE ownerUid = :ownerUid")
     suspend fun getAllStockItemsSnapshot(ownerUid: String): List<StockItem>
 
+    @Query(
+        "SELECT MAX(CAST(trim(sid) AS INTEGER)) FROM stock_table " +
+            "WHERE ownerUid = :ownerUid AND trim(sid) <> '' " +
+            "AND trim(sid) NOT GLOB '*[^0-9]*'"
+    )
+    suspend fun getMaxNumericSid(ownerUid: String): Int?
+
     /**
-     * @return a flow of table groups identified by SID + UID + location.
+     * @return a flow of stock cards identified by UID + location + stock name + table rules.
      */
     @Query(
-        "SELECT ownerUid, location, sid, " +
-            "COALESCE(MAX(NULLIF(trim(stockName), '')), '') AS stockName, " +
+        "SELECT ownerUid, location, " +
+            "COALESCE(NULLIF(trim(stockName), ''), '') AS stockName, " +
+            "identifierKey, " +
             "COUNT(*) AS totalRecords, " +
             "COUNT(DISTINCT identifierKey) AS schemaCount, " +
             "CASE WHEN COUNT(*) > 0 AND COUNT(*) = SUM(CASE WHEN uploadedAt IS NOT NULL THEN 1 ELSE 0 END) " +
@@ -48,24 +56,38 @@ interface StockItemDao {
             "MAX(dateScanned) AS lastScannedAt " +
             "FROM stock_table " +
             "WHERE ownerUid = :ownerUid " +
-            "GROUP BY ownerUid, location, sid " +
-            "ORDER BY lastScannedAt DESC, sid ASC, location COLLATE NOCASE ASC"
+            "GROUP BY ownerUid, location, COALESCE(NULLIF(trim(stockName), ''), ''), identifierKey " +
+            "ORDER BY lastScannedAt DESC, location COLLATE NOCASE ASC, stockName COLLATE NOCASE ASC"
     )
     fun getInventoryGroups(ownerUid: String): Flow<List<InventoryGroup>>
 
     /**
-     * @return a flow of all records for a table group.
+     * @return a flow of all records for a stock card.
      */
     @Query(
         "SELECT * FROM stock_table " +
             "WHERE ownerUid = :ownerUid AND location = :location " +
-            "AND sid = :sid " +
+            "AND COALESCE(NULLIF(trim(stockName), ''), '') = :stockName " +
+            "AND identifierKey = :identifierKey " +
             "ORDER BY dateScanned DESC"
     )
     fun getItemsForTable(
         ownerUid: String,
         location: String,
-        sid: String
+        stockName: String,
+        identifierKey: String
+    ): Flow<List<StockItem>>
+
+    @Query(
+        "SELECT * FROM stock_table " +
+            "WHERE ownerUid = :ownerUid AND location = :location " +
+            "AND COALESCE(NULLIF(trim(stockName), ''), '') = :stockName " +
+            "ORDER BY dateScanned DESC"
+    )
+    fun getItemsForTableAllSchemas(
+        ownerUid: String,
+        location: String,
+        stockName: String
     ): Flow<List<StockItem>>
 
     /**
@@ -107,23 +129,27 @@ interface StockItemDao {
     @Query(
         "UPDATE stock_table SET location = :newLocation " +
             "WHERE ownerUid = :ownerUid AND location = :oldLocation " +
-            "AND sid = :oldSid"
+            "AND COALESCE(NULLIF(trim(stockName), ''), '') = :stockName " +
+            "AND identifierKey = :identifierKey"
     )
     suspend fun updateTableLocation(
         ownerUid: String,
         oldLocation: String,
-        oldSid: String,
+        stockName: String,
+        identifierKey: String,
         newLocation: String
     )
 
     @Query(
         "DELETE FROM stock_table WHERE ownerUid = :ownerUid AND location = :location " +
-            "AND sid = :sid"
+            "AND COALESCE(NULLIF(trim(stockName), ''), '') = :stockName " +
+            "AND identifierKey = :identifierKey"
     )
     suspend fun deleteTableGroup(
         ownerUid: String,
         location: String,
-        sid: String
+        stockName: String,
+        identifierKey: String
     )
 
     @Query(

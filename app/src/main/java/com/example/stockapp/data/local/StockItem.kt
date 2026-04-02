@@ -1,12 +1,18 @@
 package com.example.stockapp.data.local
 
+import android.annotation.SuppressLint
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
 /**
  * Represents a single stock item in the database with hybrid JSON storage.
+ *
+ * Table rules:
+ * - Table name: stock_table
+ * - Primary key: id
  *
  * @property id Unique record identifier.
  * @property sid Schema/session identifier (SID) used to group one stock-take table.
@@ -18,8 +24,18 @@ import java.util.UUID
  * @property variableData JSON payload that stores the scanned QR values.
  * @property ownerUid The account that owns this stock record.
  */
+
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
-@Entity(tableName = "stock_table")
+@Entity(
+    tableName = "stock_table",
+    indices = [
+        Index(value = ["ownerUid", "dateScanned"]),
+        Index(value = ["ownerUid", "location", "stockName", "identifierKey", "dateScanned"]),
+        Index(value = ["ownerUid", "location", "sid", "identifierKey", "dateScanned"]),
+        Index(value = ["ownerUid", "uploadedAt"])
+    ]
+)
 data class StockItem(
     @PrimaryKey
     val id: String = UUID.randomUUID().toString(),
