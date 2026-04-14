@@ -19,4 +19,15 @@ interface StockUploadApi {
         @Header("X-Api-Key") apiKey: String,
         @Body request: StockUploadItemDto
     ): Response<ResponseBody>
+
+    @Headers(
+        "Accept: application/json",
+        "Content-Type: application/json"
+    )
+    @POST
+    suspend fun uploadInventoryBulk(
+        @Url url: String,
+        @Header("X-Api-Key") apiKey: String,
+        @Body request: List<StockUploadItemDto>
+    ): Response<ResponseBody>
 }

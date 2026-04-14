@@ -137,7 +137,7 @@ class CreateStockViewModel(
             ownerUid = ownerUid
         )
 
-        _scannedItems.value = _scannedItems.value + scannedItem
+        _scannedItems.value += scannedItem
         if (fingerprint.isNotBlank()) {
             seenScanFingerprints.add(fingerprint)
         }
@@ -185,13 +185,12 @@ class CreateStockViewModel(
                     val existingLocation = savedLocationsSnapshot
                         .firstOrNull { it.locationNormalized == normalizedLocation }
                     val locationDisplayName = existingLocation?.location ?: location.trim()
-                    val stockNameDisplayName = trimmedStockName
 
                     val itemsToSave = tempItems.map { item ->
                         item.copy(
                             identifierKey = buildIdentifierKeyFromItem(item),
                             location = locationDisplayName,
-                            stockName = stockNameDisplayName,
+                            stockName = trimmedStockName,
                             ownerUid = ownerUid
                         )
                     }

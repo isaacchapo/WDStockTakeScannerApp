@@ -293,7 +293,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     }
 
     companion object {
-        private const val DEFAULT_UPLOAD_ENDPOINT_PATH = "/api/stock/upload"
+        private const val DEFAULT_UPLOAD_ENDPOINT_PATH = "/p/p"
     }
 }
 

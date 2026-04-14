@@ -87,13 +87,16 @@ private val HTTP_PREFIX_REGEX = Regex("^https?://", RegexOption.IGNORE_CASE)
 internal fun sanitizeDeviceBaseUrlInput(rawInput: String): String {
     return rawInput
         .trim()
-        .replaceFirst(HTTP_PREFIX_REGEX, "")
-        .trim('/')
+        .trimEnd('/')
 }
 
 internal fun buildDeviceBaseUrl(baseUrlInput: String): String {
-    val hostAndPort = sanitizeDeviceBaseUrlInput(baseUrlInput)
-    return "http://$hostAndPort"
+    val normalizedInput = sanitizeDeviceBaseUrlInput(baseUrlInput)
+    return if (HTTP_PREFIX_REGEX.containsMatchIn(normalizedInput)) {
+        normalizedInput
+    } else {
+        "http://$normalizedInput"
+    }
 }
 
 internal fun sanitizeEndpointSuffixInput(rawInput: String): String {
@@ -610,11 +613,10 @@ fun ViewStockCardScreen(
                     OutlinedTextField(
                         value = deviceBaseUrl,
                         onValueChange = {
-                            deviceBaseUrl = sanitizeDeviceBaseUrlInput(it)
+                            deviceBaseUrl = it
                         },
-                        label = { Text("IP and Port") },
-                        prefix = { Text("http://") },
-                        placeholder = { Text("192.168.1.10:8080") },
+                        label = { Text("Base URL") },
+                        placeholder = { Text("http://192.168.0.0:8000") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = stockOutlinedTextFieldColors()

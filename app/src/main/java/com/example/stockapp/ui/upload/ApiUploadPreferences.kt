@@ -7,7 +7,7 @@ private const val KEY_BASE_URL = "base_url"
 private const val KEY_ENDPOINT_PATH = "endpoint_path"
 private const val KEY_API_KEY = "api_key"
 
-const val DEFAULT_UPLOAD_ENDPOINT_PATH = "/api/stock/upload"
+const val DEFAULT_UPLOAD_ENDPOINT_PATH = "/p/p"
 
 data class ApiUploadConfig(
     val baseUrl: String,

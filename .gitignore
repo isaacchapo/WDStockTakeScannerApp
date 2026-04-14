@@ -27,3 +27,7 @@ Thumbs.db
 
 # Local tool metadata
 .grok/
+
+# Local runtime artifacts
+.android-user/
+releases/

@@ -278,7 +278,8 @@ class StockRepository(
                 return@withContext Result.failure(IllegalArgumentException("API key is required for upload."))
             }
 
-            val urlResult = stockUploadClient.buildUploadUrl(baseUrl, endpointPath)
+            val normalizedEndpointPath = normalizeUploadEndpointPath(endpointPath)
+            val urlResult = stockUploadClient.buildUploadUrl(baseUrl, normalizedEndpointPath)
             val uploadUrl = urlResult.getOrElse { return@withContext Result.failure(it) }
 
             val itemPayload = scopedItems.map { item -> item.toUploadDto(ownerUid) }
@@ -410,3 +411,23 @@ private fun normalizeColumnKey(raw: String): String {
         .lowercase(Locale.ROOT)
         .replace(Regex("[^a-z0-9]"), "")
 }
+
+private fun normalizeUploadEndpointPath(rawPath: String): String {
+    val trimmed = rawPath.trim()
+    if (trimmed.isBlank() || trimmed == "/") return PREFERRED_UPLOAD_ENDPOINT_PATH
+
+    val withLeadingSlash = if (trimmed.startsWith("/")) trimmed else "/$trimmed"
+    val normalized = withLeadingSlash.trimEnd('/')
+    if (normalized.isBlank() || normalized == "/") return PREFERRED_UPLOAD_ENDPOINT_PATH
+
+    return when {
+        normalized.equals(LEGACY_UPLOAD_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_UPLOAD_ENDPOINT_PATH
+        normalized.equals(LEGACY_UPLOAD_BULK_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_BULK_UPLOAD_ENDPOINT_PATH
+        else -> normalized
+    }
+}
+
+private const val LEGACY_UPLOAD_ENDPOINT_PATH = "/api/stock/upload"
+private const val LEGACY_UPLOAD_BULK_ENDPOINT_PATH = "/api/stock/upload/bulk"
+private const val PREFERRED_UPLOAD_ENDPOINT_PATH = "/p/p"
+private const val PREFERRED_BULK_UPLOAD_ENDPOINT_PATH = "/p/p/bulk"

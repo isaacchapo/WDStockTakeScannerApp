@@ -15,6 +15,7 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.UnknownHostException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
@@ -29,6 +30,7 @@ class StockUploadClient {
         const val TAG = "StockUploadClient"
         const val HOST_REACHABILITY_TIMEOUT_MS = 4000
         const val ENABLE_UPLOAD_DEBUG_LOGS = false
+        const val BULK_UPLOAD_PATH_SUFFIX = "/p/p/bulk"
     }
 
     private val gson = Gson()
@@ -125,7 +127,25 @@ class StockUploadClient {
             return Result.failure(reachabilityError)
         }
 
+        val isBulkUpload = isBulkUploadPath(parsedUrl.encodedPath)
+
         return try {
+            if (isBulkUpload) {
+                if (ENABLE_UPLOAD_DEBUG_LOGS) {
+                    Log.d(TAG, "Bulk uploading ${items.size} items to $uploadUrl")
+                    Log.d(TAG, "Bulk payload: ${gson.toJson(items)}")
+                }
+                val bulkResult = uploadBulkWithRetry(
+                    uploadUrl = uploadUrl,
+                    apiKey = apiKey,
+                    items = items,
+                    policy = policy
+                )
+                val successMessage = bulkResult.getOrElse { return Result.failure(it) }
+                onProgress(items.size, items.size)
+                return Result.success(successMessage)
+            }
+
             var lastSuccessMessage = "Stock data uploaded successfully."
 
             // Upload items one by one because the server expects a single object, not an array
@@ -166,6 +186,57 @@ class StockUploadClient {
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error", e)
             Result.failure(e)
+        }
+    }
+
+    private suspend fun uploadBulkWithRetry(
+        uploadUrl: String,
+        apiKey: String,
+        items: List<StockUploadItemDto>,
+        policy: UploadPolicy
+    ): Result<String> {
+        var attempt = 0
+        while (true) {
+            try {
+                val response = api.uploadInventoryBulk(uploadUrl, apiKey, items)
+                if (response.isSuccessful) {
+                    val successMessage = parseSuccessMessage(response)
+                    return Result.success(
+                        if (successMessage.isBlank()) {
+                            "Uploaded ${items.size} item(s) successfully."
+                        } else {
+                            successMessage
+                        }
+                    )
+                }
+
+                if (shouldRetry(response.code()) && attempt < policy.maxRetries) {
+                    delay(backoffDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs))
+                    attempt++
+                    continue
+                }
+
+                val errorBody = response.errorBody()?.string() ?: "No error body"
+                Log.e(TAG, "HTTP Error ${response.code()}: $errorBody")
+                return Result.failure(
+                    buildHttpError(
+                        uploadUrl = uploadUrl,
+                        response = response,
+                        rawErrorBody = errorBody
+                    )
+                )
+            } catch (e: IOException) {
+                if (attempt < policy.maxRetries) {
+                    delay(backoffDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs))
+                    attempt++
+                    continue
+                }
+                return Result.failure(
+                    IllegalStateException("Network error while bulk uploading to $uploadUrl.", e)
+                )
+            } catch (e: Exception) {
+                return Result.failure(e)
+            }
         }
     }
 
@@ -264,6 +335,11 @@ class StockUploadClient {
     private fun backoffDelayMs(attempt: Int, baseDelayMs: Long, maxDelayMs: Long): Long {
         val exponential = baseDelayMs * (1 shl attempt)
         return maxDelayMs.coerceAtMost(max(exponential, baseDelayMs))
+    }
+
+    private fun isBulkUploadPath(rawPath: String): Boolean {
+        val normalized = rawPath.trim().trimEnd('/').lowercase(Locale.ROOT)
+        return normalized == BULK_UPLOAD_PATH_SUFFIX || normalized.endsWith(BULK_UPLOAD_PATH_SUFFIX)
     }
 
     private suspend fun verifyHostReachable(uploadUrl: HttpUrl): Result<Unit> = withContext(Dispatchers.IO) {

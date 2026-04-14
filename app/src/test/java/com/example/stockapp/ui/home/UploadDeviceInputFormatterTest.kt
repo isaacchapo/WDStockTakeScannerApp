@@ -6,10 +6,10 @@ import org.junit.Test
 class UploadDeviceInputFormatterTest {
 
     @Test
-    fun sanitizeDeviceBaseUrlInput_removesSchemeAndOuterSlashes() {
+    fun sanitizeDeviceBaseUrlInput_trimsInputAndTrailingSlash() {
         val sanitized = sanitizeDeviceBaseUrlInput("  https://192.168.1.10:8080/  ")
 
-        assertEquals("192.168.1.10:8080", sanitized)
+        assertEquals("https://192.168.1.10:8080", sanitized)
     }
 
     @Test
@@ -17,6 +17,13 @@ class UploadDeviceInputFormatterTest {
         val url = buildDeviceBaseUrl("192.168.1.10:8080")
 
         assertEquals("http://192.168.1.10:8080", url)
+    }
+
+    @Test
+    fun buildDeviceBaseUrl_preservesHttpsScheme() {
+        val url = buildDeviceBaseUrl(" https://192.168.1.10:8080/ ")
+
+        assertEquals("https://192.168.1.10:8080", url)
     }
 
     @Test
@@ -41,10 +48,10 @@ class UploadDeviceInputFormatterTest {
     }
 
     @Test
-    fun buildEndpointPath_defaultsWhenSuffixIsEmpty() {
+    fun buildEndpointPath_defaultsToPpWhenSuffixIsEmpty() {
         val endpointPath = buildEndpointPath("")
 
-        assertEquals("/api/stock/upload", endpointPath)
+        assertEquals("/p/p", endpointPath)
     }
 
     @Test

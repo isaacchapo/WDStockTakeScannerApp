@@ -5,8 +5,3 @@ plugins {
     id("com.google.devtools.ksp") version "1.9.22-1.0.17" apply false
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22" apply false
 }
-
-// Workaround for IDEs that request this task per-module.
-subprojects {
-    tasks.register("prepareKotlinBuildScriptModel") {}
-}
