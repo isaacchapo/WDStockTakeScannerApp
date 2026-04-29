@@ -27,9 +27,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -684,7 +686,10 @@ fun CreateStockCardScreen(
                 }
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(bottom = 12.dp),
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1295,33 +1300,40 @@ private fun StatusIndicator(statusText: String) {
 
 @Composable
 private fun CreateStockTopBar(onBack: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(StockAppColors.NavyMid)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+    androidx.compose.material3.Surface(
+        tonalElevation = 4.dp,
+        shadowElevation = 8.dp,
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Text(
-            text = "STOCK TAKE",
-            color = StockAppColors.TextPrimary,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            modifier = Modifier.align(Alignment.Center)
-        )
-
-        IconButton(
-            onClick = onBack,
+        Box(
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .size(34.dp)
+                .fillMaxWidth()
+                .background(StockAppColors.NavyMid)
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            Icon(
-                imageVector = Icons.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = StockAppColors.TextPrimary,
-                modifier = Modifier.size(20.dp)
+            Text(
+                text = "STOCK TAKE",
+                color = StockAppColors.TextPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                modifier = Modifier.align(Alignment.Center)
             )
+
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(34.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = StockAppColors.TextPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }

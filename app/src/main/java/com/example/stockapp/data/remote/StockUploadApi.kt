@@ -17,7 +17,7 @@ interface StockUploadApi {
     suspend fun uploadInventory(
         @Url url: String,
         @Header("X-Api-Key") apiKey: String,
-        @Body request: StockUploadItemDto
+        @Body request: UnifiedStockUploadRequest
     ): Response<ResponseBody>
 
     @Headers(
@@ -28,6 +28,6 @@ interface StockUploadApi {
     suspend fun uploadInventoryBulk(
         @Url url: String,
         @Header("X-Api-Key") apiKey: String,
-        @Body request: List<StockUploadItemDto>
+        @Body request: UnifiedStockBulkUploadRequest
     ): Response<ResponseBody>
 }

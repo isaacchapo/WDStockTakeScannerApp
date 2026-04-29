@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -32,6 +34,7 @@ fun StockAppTopBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(backgroundBrush)
+            .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 18.dp)
     ) {
         if (logoResId != null) {
@@ -52,6 +55,5 @@ fun StockAppTopBar(
             letterSpacing = 1.sp,
             modifier = Modifier.align(Alignment.Center)
         )
-
     }
 }

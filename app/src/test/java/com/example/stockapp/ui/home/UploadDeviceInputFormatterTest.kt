@@ -48,10 +48,10 @@ class UploadDeviceInputFormatterTest {
     }
 
     @Test
-    fun buildEndpointPath_defaultsToPpWhenSuffixIsEmpty() {
+    fun buildEndpointPath_defaultsToApiAppWhenSuffixIsEmpty() {
         val endpointPath = buildEndpointPath("")
 
-        assertEquals("/p/p", endpointPath)
+        assertEquals("/api/app", endpointPath)
     }
 
     @Test

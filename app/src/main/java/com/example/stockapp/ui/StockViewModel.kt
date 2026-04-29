@@ -28,6 +28,7 @@ import java.util.Locale
 @OptIn(ExperimentalCoroutinesApi::class)
 class StockViewModel(private val repository: StockRepository) : ViewModel() {
     private val _activeUserUid = MutableStateFlow<String?>(null)
+    private val _activeUserPassword = MutableStateFlow<String?>(null)
     val activeUserUid = _activeUserUid.asStateFlow()
 
     /**
@@ -86,17 +87,18 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
      */
     fun createUser(
         uid: String,
+        email: String,
         password: String,
-        onComplete: (Boolean) -> Unit = {}
+        securityKey: String,
+        onComplete: (Result<Unit>) -> Unit = {}
     ) = viewModelScope.launch {
         if (_createInProgress.value) return@launch
         _createInProgress.value = true
         try {
-            val created = repository.createUser(uid, password)
-            onComplete(created)
+            onComplete(repository.createUser(uid, email, password, securityKey))
         } catch (e: Exception) {
             Log.e("StockViewModel", "Create user failed", e)
-            onComplete(false)
+            onComplete(Result.failure(e))
         } finally {
             _createInProgress.value = false
         }
@@ -108,21 +110,29 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
      * @param password The user's password.
      */
     fun loginUser(uid: String, password: String) = viewModelScope.launch {
+        val trimmedUid = uid.trim()
+        val trimmedPassword = password.trim()
         if (_loginInProgress.value) return@launch
-        if (uid.isBlank() || password.isBlank()) {
+        if (trimmedUid.isBlank() || trimmedPassword.isBlank()) {
             _loginResult.value = null
             return@launch
         }
         _loginInProgress.value = true
         try {
-            val loginSucceeded = repository.loginUser(uid, password)
+            val loginSucceeded = repository.loginUser(trimmedUid, trimmedPassword)
             _loginResult.value = loginSucceeded
             if (loginSucceeded) {
-                _activeUserUid.value = uid
+                _activeUserUid.value = trimmedUid
+                _activeUserPassword.value = trimmedPassword
+            } else {
+                _activeUserUid.value = null
+                _activeUserPassword.value = null
             }
         } catch (e: Exception) {
             Log.e("StockViewModel", "Login failed", e)
             _loginResult.value = false
+            _activeUserUid.value = null
+            _activeUserPassword.value = null
         } finally {
             _loginInProgress.value = false
         }
@@ -130,6 +140,7 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
 
     fun clearActiveUser() {
         _activeUserUid.value = null
+        _activeUserPassword.value = null
     }
 
     /**
@@ -193,11 +204,18 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
     ): Result<String> {
         val ownerUid = _activeUserUid.value
             ?: return Result.failure(IllegalStateException("No active user found."))
+        val userPassword = _activeUserPassword.value?.trim().orEmpty()
+        if (userPassword.isBlank()) {
+            return Result.failure(
+                IllegalStateException("No active password found. Log in again before uploading.")
+            )
+        }
         return repository.uploadInventory(
             baseUrl = baseUrl,
             endpointPath = endpointPath,
             apiKey = apiKey,
             ownerUid = ownerUid,
+            userPassword = userPassword,
             stockItems = stockItems,
             onProgress = onProgress
         )
@@ -292,8 +310,29 @@ class StockViewModel(private val repository: StockRepository) : ViewModel() {
         }
     }
 
+    fun deleteUploadDevice(
+        nameNormalized: String,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) = viewModelScope.launch {
+        val ownerUid = _activeUserUid.value
+            ?: return@launch onComplete(Result.failure(IllegalStateException("No active user found.")))
+
+        val trimmedNameNormalized = nameNormalized.trim()
+        if (trimmedNameNormalized.isBlank()) {
+            return@launch onComplete(Result.failure(IllegalArgumentException("Device name is required.")))
+        }
+
+        runCatching {
+            repository.deleteUploadDevice(ownerUid, trimmedNameNormalized)
+        }.onSuccess {
+            onComplete(Result.success(Unit))
+        }.onFailure { error ->
+            onComplete(Result.failure(error))
+        }
+    }
+
     companion object {
-        private const val DEFAULT_UPLOAD_ENDPOINT_PATH = "/p/p"
+        private const val DEFAULT_UPLOAD_ENDPOINT_PATH = "/api/app"
     }
 }
 

@@ -102,7 +102,7 @@ private fun generateSchemaPdf(
     }
     val bodyPaint = Paint().apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
-        textSize = 9.5f
+        textSize = 9f
         isAntiAlias = true
     }
     val metadataPaint = Paint().apply {
@@ -124,6 +124,45 @@ private fun generateSchemaPdf(
     lateinit var canvas: android.graphics.Canvas
     var y = margin
 
+    fun wrapText(text: String, paint: Paint, maxWidth: Float): List<String> {
+        val words = text.split(" ")
+        val lines = mutableListOf<String>()
+        var currentLine = StringBuilder()
+
+        for (word in words) {
+            val testLine = if (currentLine.isEmpty()) word else "${currentLine} $word"
+            if (paint.measureText(testLine) <= maxWidth) {
+                currentLine.append(if (currentLine.isEmpty()) word else " $word")
+            } else {
+                if (currentLine.isNotEmpty()) {
+                    lines.add(currentLine.toString())
+                    currentLine = StringBuilder(word)
+                } else {
+                    // Word itself is longer than maxWidth, force break it
+                    var remainingWord = word
+                    while (remainingWord.isNotEmpty()) {
+                        var count = paint.breakText(remainingWord, true, maxWidth, null)
+                        if (count <= 0) count = 1
+                        lines.add(remainingWord.take(count))
+                        remainingWord = remainingWord.drop(count)
+                    }
+                }
+            }
+        }
+        if (currentLine.isNotEmpty()) lines.add(currentLine.toString())
+        return if (lines.isEmpty()) listOf("") else lines
+    }
+
+    fun calculateRowHeight(values: List<String>, columnWidths: List<Float>, paint: Paint): Float {
+        var maxHeight = bodyRowHeight
+        values.forEachIndexed { index, value ->
+            val wrapped = wrapText(value, paint, columnWidths[index] - 10f)
+            val height = wrapped.size * (paint.textSize * 1.2f) + 8f
+            if (height > maxHeight) maxHeight = height
+        }
+        return maxHeight
+    }
+
     fun drawMergedRow(
         text: String,
         top: Float,
@@ -139,30 +178,63 @@ private fun generateSchemaPdf(
         canvas.drawRect(margin, top, margin + tableWidth, top + height, strokePaint)
 
         textPaint.color = textColor
-        val baseline = top + (height / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2f)
-        val startX = if (centered) {
-            margin + ((tableWidth - textPaint.measureText(text)) / 2f).coerceAtLeast(8f)
-        } else {
-            margin + 8f
+        val wrappedLines = wrapText(text, textPaint, tableWidth - 16f)
+        val totalTextHeight = wrappedLines.size * (textPaint.textSize * 1.2f)
+        var currentY = top + (height - totalTextHeight) / 2f - textPaint.ascent()
+
+        wrappedLines.forEach { line ->
+            val startX = if (centered) {
+                margin + (tableWidth - textPaint.measureText(line)) / 2f
+            } else {
+                margin + 8f
+            }
+            canvas.drawText(line, startX, currentY, textPaint)
+            currentY += textPaint.textSize * 1.2f
         }
-        canvas.drawText(text, startX, baseline, textPaint)
     }
 
-    fun drawHeader(columns: List<String>, top: Float) {
-        val columnWidth = tableWidth / columns.size.coerceAtLeast(1)
+    fun calculateColumnWidths(columns: List<String>, allRows: List<List<String>>, paint: Paint): List<Float> {
+        val numCols = columns.size
+        if (numCols == 0) return emptyList()
+        val maxWidths = FloatArray(numCols) { 0f }
+
+        columns.forEachIndexed { i, col ->
+            maxWidths[i] = paint.measureText(col) + 20f
+        }
+        allRows.forEach { row ->
+            row.forEachIndexed { i, value ->
+                if (i < numCols) {
+                    val measure = paint.measureText(value.take(30)) + 20f
+                    if (measure > maxWidths[i]) maxWidths[i] = measure
+                }
+            }
+        }
+
+        val totalMeasured = maxWidths.sum()
+        val finalWidths = maxWidths.map { (it / totalMeasured) * tableWidth }
+        
+        val minColumnWidth = (tableWidth / numCols) * 0.4f
+        val adjustedWidths = finalWidths.map { it.coerceAtLeast(minColumnWidth) }
+        val adjustedTotal = adjustedWidths.sum()
+        
+        return adjustedWidths.map { (it / adjustedTotal) * tableWidth }
+    }
+
+    fun drawHeader(columns: List<String>, columnWidths: List<Float>, top: Float) {
         var x = margin
-        columns.forEach { rawColumn ->
+        columns.forEachIndexed { index, rawColumn ->
+            val columnWidth = columnWidths[index]
             fillPaint.color = 0xFF0A4A99.toInt()
             canvas.drawRect(x, top, x + columnWidth, top + headerRowHeight, fillPaint)
             strokePaint.color = 0xFFFFFFFF.toInt()
             canvas.drawRect(x, top, x + columnWidth, top + headerRowHeight, strokePaint)
 
             val headerLabel = rawColumn.uppercase()
-            val maxChars = ((columnWidth - 10f) / 6f).toInt().coerceAtLeast(1)
-            val display = headerLabel.take(maxChars)
             headerPaint.color = 0xFFFFFFFF.toInt()
+            val wrapped = wrapText(headerLabel, headerPaint, columnWidth - 8f)
             val baseline = top + (headerRowHeight / 2f) - ((headerPaint.descent() + headerPaint.ascent()) / 2f)
-            canvas.drawText(display, x + 5f, baseline, headerPaint)
+            // Header is single line for simplicity, but uses wrap logic to truncate if still too long
+            canvas.drawText(wrapped.first().take(((columnWidth - 8f) / 6f).toInt().coerceAtLeast(1)), x + 5f, baseline, headerPaint)
             x += columnWidth
         }
     }
@@ -178,21 +250,25 @@ private fun generateSchemaPdf(
         )
     }
 
-    fun drawBodyRow(values: List<String>, top: Float, rowIndex: Int) {
-        val columnWidth = tableWidth / values.size.coerceAtLeast(1)
+    fun drawBodyRow(values: List<String>, columnWidths: List<Float>, top: Float, height: Float, rowIndex: Int) {
         var x = margin
-        values.forEach { rawValue ->
+        values.forEachIndexed { index, rawValue ->
+            val columnWidth = columnWidths[index]
             fillPaint.color = if (rowIndex % 2 == 0) 0xFFF8FBFF.toInt() else 0xFFF2F7FF.toInt()
-            canvas.drawRect(x, top, x + columnWidth, top + bodyRowHeight, fillPaint)
+            canvas.drawRect(x, top, x + columnWidth, top + height, fillPaint)
             strokePaint.color = 0xFFDCE6F1.toInt()
-            canvas.drawRect(x, top, x + columnWidth, top + bodyRowHeight, strokePaint)
+            canvas.drawRect(x, top, x + columnWidth, top + height, strokePaint)
 
             val textValue = rawValue.trim()
-            val maxChars = ((columnWidth - 10f) / 5.5f).toInt().coerceAtLeast(1)
-            val display = textValue.take(maxChars)
             bodyPaint.color = 0xFF263238.toInt()
-            val baseline = top + (bodyRowHeight / 2f) - ((bodyPaint.descent() + bodyPaint.ascent()) / 2f)
-            canvas.drawText(display, x + 5f, baseline, bodyPaint)
+            val wrapped = wrapText(textValue, bodyPaint, columnWidth - 10f)
+            var currentY = top + 4f - bodyPaint.ascent()
+            wrapped.forEach { line ->
+                if (currentY - top + bodyPaint.descent() < height) {
+                    canvas.drawText(line, x + 5f, currentY, bodyPaint)
+                    currentY += bodyPaint.textSize * 1.2f
+                }
+            }
             x += columnWidth
         }
     }
@@ -221,6 +297,7 @@ private fun generateSchemaPdf(
         startNewPage(group)
 
         group.sections.forEach { section ->
+            val columnWidths = calculateColumnWidths(section.columns, section.rows, bodyPaint)
             val sectionTitle = section.title
             val minimumSectionSpace = sectionTitleHeight + headerRowHeight + bodyRowHeight
             if (y + minimumSectionSpace > pageHeight - (metadataRowHeight + margin)) {
@@ -228,19 +305,20 @@ private fun generateSchemaPdf(
             }
             drawSectionTitle(sectionTitle, y)
             y += sectionTitleHeight
-            drawHeader(section.columns, y)
+            drawHeader(section.columns, columnWidths, y)
             y += headerRowHeight
 
             section.rows.forEachIndexed { rowIndex, rowValues ->
-                if (y + bodyRowHeight > pageHeight - (metadataRowHeight + margin)) {
+                val currentRowHeight = calculateRowHeight(rowValues, columnWidths, bodyPaint)
+                if (y + currentRowHeight > pageHeight - (metadataRowHeight + margin)) {
                     startNewPage(group)
                     drawSectionTitle(sectionTitle, y)
                     y += sectionTitleHeight
-                    drawHeader(section.columns, y)
+                    drawHeader(section.columns, columnWidths, y)
                     y += headerRowHeight
                 }
-                drawBodyRow(rowValues, y, rowIndex)
-                y += bodyRowHeight
+                drawBodyRow(rowValues, columnWidths, y, currentRowHeight, rowIndex)
+                y += currentRowHeight
             }
 
             y += sectionGap

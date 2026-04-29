@@ -8,12 +8,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -21,10 +25,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Login
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -42,370 +48,371 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.stockapp.R
 import com.example.stockapp.ui.common.FooterBranding
+import com.example.stockapp.ui.common.SoftInputAdjustNothingMode
 import com.example.stockapp.ui.common.StockAppColors
 import com.example.stockapp.ui.common.StockAppTopBar
 import com.example.stockapp.ui.common.TidyTextField
+import com.example.stockapp.ui.common.WindowSoftInputModeEffect
+
+private enum class AuthMode { LOGIN, CREATE }
 
 @Composable
 fun LoginScreen(
     onLogin: (String, String) -> Unit,
     onInputChanged: () -> Unit,
-    onCreateAccount: (String, String, (Boolean) -> Unit) -> Unit,
+    onCreateAccount: (String, String, String, String, (Result<Unit>) -> Unit) -> Unit,
     showError: Boolean,
     loginLoading: Boolean,
     createLoading: Boolean
 ) {
-    var isCreateAccountMode by rememberSaveable { mutableStateOf(false) }
+    WindowSoftInputModeEffect(SoftInputAdjustNothingMode)
+
+    var authModeName by rememberSaveable { mutableStateOf(AuthMode.LOGIN.name) }
+    val authMode = AuthMode.valueOf(authModeName)
 
     var loginUid by rememberSaveable { mutableStateOf("") }
     var loginPassword by rememberSaveable { mutableStateOf("") }
-    var showLoginInputError by rememberSaveable { mutableStateOf(false) }
+    var loginInputError by rememberSaveable { mutableStateOf(false) }
 
     var createUid by rememberSaveable { mutableStateOf("") }
+    var createEmail by rememberSaveable { mutableStateOf("") }
     var createPassword by rememberSaveable { mutableStateOf("") }
-    var showCreateInputError by rememberSaveable { mutableStateOf(false) }
-    var createAccountError by rememberSaveable { mutableStateOf<String?>(null) }
+    var createSecurityKey by rememberSaveable { mutableStateOf("") }
+    var createError by rememberSaveable { mutableStateOf<String?>(null) }
+    var createInputError by rememberSaveable { mutableStateOf(false) }
 
-    var lastLoginActionAtMs by remember { mutableLongStateOf(0L) }
-    var lastCreateActionAtMs by remember { mutableLongStateOf(0L) }
-    var lastModeSwitchActionAtMs by remember { mutableLongStateOf(0L) }
+    var lastActionAtMs by remember { mutableLongStateOf(0L) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        StockAppTopBar(title = "STOCK TAKE", logoResId = R.drawable.logo)
+    fun switchMode(target: AuthMode) {
+        authModeName = target.name
+        loginInputError = false
+        createInputError = false
+        createError = null
+        onInputChanged()
+    }
 
+    fun shouldThrottle(): Boolean {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (nowMs - lastActionAtMs < 300L) return true
+        lastActionAtMs = nowMs
+        return false
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.Top,
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier.fillMaxSize()
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
+            StockAppTopBar(title = "STOCK TAKE", logoResId = R.drawable.logo)
 
-                    Text(
-                        text = if (isCreateAccountMode) "Create Account" else "Welcome Back",
-                        color = StockAppColors.TextPrimary,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (isCreateAccountMode) {
-                            "Set your credentials to manage stock data"
-                        } else {
-                            "Sign in to manage your stock data"
-                        },
-                        color = StockAppColors.TextSecondary,
-                        fontSize = 14.sp
-                    )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = when (authMode) {
+                        AuthMode.LOGIN -> "Welcome Back"
+                        AuthMode.CREATE -> "Create Account"
+                    },
+                    color = StockAppColors.TextPrimary,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = when (authMode) {
+                        AuthMode.LOGIN -> "Sign in to manage your stock data"
+                        AuthMode.CREATE -> "Set your credentials to manage stock data"
+                    },
+                    color = StockAppColors.TextSecondary,
+                    fontSize = 13.sp
+                )
+                Spacer(modifier = Modifier.height(16.dp))
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Card(
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 320.dp)
+                        .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(20.dp)),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface)
+                ) {
+                    val formSpacing = 10.dp
+                    val formVerticalPadding = 16.dp
+                    val formHorizontalPadding = 20.dp
+                    val fieldHeight = 40.dp
+                    
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .widthIn(max = 360.dp)
-                            .border(1.dp, StockAppColors.CardBorder, RoundedCornerShape(18.dp)),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = StockAppColors.CardSurface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            .padding(horizontal = formHorizontalPadding, vertical = formVerticalPadding),
+                        verticalArrangement = Arrangement.spacedBy(formSpacing),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 18.dp, vertical = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            if (isCreateAccountMode) {
-                                createAccountError?.let { error ->
-                                    Text(
-                                        text = error,
-                                        color = StockAppColors.Danger,
-                                        fontSize = 13.sp
+                        when (authMode) {
+                            AuthMode.LOGIN -> {
+                                if (showError) ErrorText("Incorrect UID or password")
+                                if (loginInputError) ErrorText("UID and password are required")
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    AuthFieldLabel(Icons.Filled.Person, "UID")
+                                    TidyTextField(
+                                        value = loginUid,
+                                        onValueChange = {
+                                            loginUid = it
+                                            loginInputError = false
+                                            onInputChanged()
+                                        },
+                                        placeholder = "Enter UID",
+                                        fieldHeight = fieldHeight,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        matchCardSurface = true
                                     )
                                 }
-                                if (showCreateInputError) {
-                                    Text(
-                                        text = "UID and password are required",
-                                        color = StockAppColors.Danger,
-                                        fontSize = 13.sp
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    AuthFieldLabel(Icons.Filled.Lock, "Password")
+                                    TidyTextField(
+                                        value = loginPassword,
+                                        onValueChange = {
+                                            loginPassword = it
+                                            loginInputError = false
+                                            onInputChanged()
+                                        },
+                                        placeholder = "Enter Password",
+                                        fieldHeight = fieldHeight,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        matchCardSurface = true
                                     )
                                 }
-                            } else {
-                                if (showError) {
-                                    Text(
-                                        text = "Incorrect UID or password",
-                                        color = StockAppColors.Danger,
-                                        fontSize = 13.sp
-                                    )
+                                
+                                Spacer(modifier = Modifier.height(2.dp))
+                                
+                                PrimaryActionButton("Login", Icons.Filled.Login, !loginLoading) {
+                                    val uid = loginUid.trim()
+                                    val password = loginPassword.trim()
+                                    if (uid.isBlank() || password.isBlank()) {
+                                        loginInputError = true
+                                        return@PrimaryActionButton
+                                    }
+                                    if (shouldThrottle()) return@PrimaryActionButton
+                                    onLogin(uid, password)
                                 }
-                                if (showLoginInputError) {
-                                    Text(
-                                        text = "UID and password are required",
-                                        color = StockAppColors.Danger,
-                                        fontSize = 13.sp
-                                    )
+                                SecondaryActionButton("Create Account", Icons.Filled.PersonAdd, !loginLoading) {
+                                    if (shouldThrottle()) return@SecondaryActionButton
+                                    switchMode(AuthMode.CREATE)
                                 }
                             }
 
-                            AuthFieldLabel(
-                                icon = Icons.Filled.Person,
-                                label = "UID"
-                            )
-                            TidyTextField(
-                                value = if (isCreateAccountMode) createUid else loginUid,
-                                onValueChange = { value ->
-                                    if (isCreateAccountMode) {
-                                        createUid = value
-                                        showCreateInputError = false
-                                        createAccountError = null
-                                    } else {
-                                        loginUid = value
-                                        showLoginInputError = false
-                                        onInputChanged()
+                            AuthMode.CREATE -> {
+                                createError?.let { ErrorText(it) }
+                                if (createInputError) ErrorText("All fields are required")
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    AuthFieldLabel(Icons.Filled.Person, "UID")
+                                    TidyTextField(
+                                        value = createUid,
+                                        onValueChange = {
+                                            createUid = it
+                                            createInputError = false
+                                            createError = null
+                                        },
+                                        placeholder = "Enter UID",
+                                        fieldHeight = fieldHeight,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        matchCardSurface = true
+                                    )
+                                }
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    AuthFieldLabel(Icons.Filled.Email, "Email")
+                                    TidyTextField(
+                                        value = createEmail,
+                                        onValueChange = {
+                                            createEmail = it
+                                            createInputError = false
+                                            createError = null
+                                        },
+                                        placeholder = "Enter Email",
+                                        fieldHeight = fieldHeight,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        matchCardSurface = true
+                                    )
+                                }
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    AuthFieldLabel(Icons.Filled.Lock, "Password")
+                                    TidyTextField(
+                                        value = createPassword,
+                                        onValueChange = {
+                                            createPassword = it
+                                            createInputError = false
+                                            createError = null
+                                        },
+                                        placeholder = "Enter Password",
+                                        fieldHeight = fieldHeight,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        matchCardSurface = true
+                                    )
+                                }
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    AuthFieldLabel(Icons.Filled.VpnKey, "Security Key")
+                                    TidyTextField(
+                                        value = createSecurityKey,
+                                        onValueChange = {
+                                            createSecurityKey = it
+                                            createInputError = false
+                                            createError = null
+                                        },
+                                        placeholder = "Enter Security Key",
+                                        fieldHeight = fieldHeight,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        matchCardSurface = true
+                                    )
+                                }
+                                
+                                Spacer(modifier = Modifier.height(2.dp))
+                                
+                                PrimaryActionButton(
+                                    text = "Create Account",
+                                    icon = Icons.Filled.PersonAdd,
+                                    enabled = !createLoading
+                                ) {
+                                    val uid = createUid.trim()
+                                    val email = createEmail.trim()
+                                    val password = createPassword.trim()
+                                    val securityKey = createSecurityKey.trim()
+                                    if (uid.isBlank() || email.isBlank() || password.isBlank() || securityKey.isBlank()) {
+                                        createInputError = true
+                                        return@PrimaryActionButton
                                     }
-                                },
-                                placeholder = "Enter UID",
-                                modifier = Modifier.fillMaxWidth(),
-                                matchCardSurface = true
-                            )
-
-                            AuthFieldLabel(
-                                icon = Icons.Filled.Lock,
-                                label = "Password"
-                            )
-                            TidyTextField(
-                                value = if (isCreateAccountMode) createPassword else loginPassword,
-                                onValueChange = { value ->
-                                    if (isCreateAccountMode) {
-                                        createPassword = value
-                                        showCreateInputError = false
-                                        createAccountError = null
-                                    } else {
-                                        loginPassword = value
-                                        showLoginInputError = false
-                                        onInputChanged()
+                                    if (!looksLikeEmail(email)) {
+                                        createError = "Enter a valid email address."
+                                        return@PrimaryActionButton
                                     }
-                                },
-                                placeholder = "Enter Password",
-                                visualTransformation = PasswordVisualTransformation(),
-                                modifier = Modifier.fillMaxWidth(),
-                                matchCardSurface = true
-                            )
-
-                            if (isCreateAccountMode) {
-                                Button(
-                                    onClick = {
-                                        val trimmedUid = createUid.trim()
-                                        val trimmedPassword = createPassword.trim()
-                                        if (trimmedUid.isBlank() || trimmedPassword.isBlank()) {
-                                            showCreateInputError = true
-                                            return@Button
-                                        }
-
-                                        val nowMs = SystemClock.elapsedRealtime()
-                                        if (nowMs - lastCreateActionAtMs < 300L) return@Button
-                                        lastCreateActionAtMs = nowMs
-                                        showCreateInputError = false
-                                        createAccountError = null
-
-                                        onCreateAccount(trimmedUid, trimmedPassword) { created ->
-                                            if (created) {
-                                                isCreateAccountMode = false
-                                                createAccountError = null
-                                                showCreateInputError = false
-                                            } else {
-                                                createAccountError = "That UID already exists. Use a different UID."
-                                            }
-                                        }
-                                    },
-                                    enabled = !createLoading,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(44.dp)
-                                        .shadow(
-                                            elevation = 6.dp,
-                                            shape = RoundedCornerShape(50),
-                                            ambientColor = StockAppColors.SoftGlowCyan.copy(alpha = 0.2f),
-                                            spotColor = StockAppColors.SoftGlowCyan.copy(alpha = 0.35f)
-                                        ),
-                                    shape = RoundedCornerShape(50),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = StockAppColors.AccentCyan,
-                                        disabledContainerColor = StockAppColors.DisabledSurface
-                                    )
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.PersonAdd,
-                                        contentDescription = null,
-                                        tint = StockAppColors.TextPrimary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Create Account",
-                                        color = StockAppColors.TextPrimary,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 14.sp
-                                    )
+                                    if (shouldThrottle()) return@PrimaryActionButton
+                                    onCreateAccount(uid, email, password, securityKey) { result ->
+                                        result.onSuccess {
+                                            createEmail = ""
+                                            createSecurityKey = ""
+                                            switchMode(AuthMode.LOGIN)
+                                        }.onFailure { createError = it.message ?: "Account creation failed." }
+                                    }
                                 }
-
-                                OutlinedButton(
-                                    onClick = {
-                                        val nowMs = SystemClock.elapsedRealtime()
-                                        if (nowMs - lastModeSwitchActionAtMs < 300L) return@OutlinedButton
-                                        lastModeSwitchActionAtMs = nowMs
-                                        isCreateAccountMode = false
-                                        showCreateInputError = false
-                                        createAccountError = null
-                                        onInputChanged()
-                                    },
-                                    enabled = !createLoading,
-                                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                                    shape = RoundedCornerShape(10.dp),
-                                    border = BorderStroke(1.dp, StockAppColors.CardBorder),
-                                    colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = StockAppColors.CardSurface,
-                                        contentColor = StockAppColors.AccentCyan
-                                    )
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.ArrowBack,
-                                        contentDescription = "Back To Login",
-                                        tint = StockAppColors.AccentCyan,
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .padding(end = 6.dp)
-                                    )
-                                    Text(
-                                        text = "Back To Login",
-                                        color = StockAppColors.AccentCyan,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            } else {
-                                Button(
-                                    onClick = {
-                                        val trimmedUid = loginUid.trim()
-                                        val trimmedPassword = loginPassword.trim()
-                                        if (trimmedUid.isBlank() || trimmedPassword.isBlank()) {
-                                            showLoginInputError = true
-                                            return@Button
-                                        }
-
-                                        val nowMs = SystemClock.elapsedRealtime()
-                                        if (nowMs - lastLoginActionAtMs < 300L) return@Button
-                                        lastLoginActionAtMs = nowMs
-                                        showLoginInputError = false
-                                        onLogin(trimmedUid, trimmedPassword)
-                                    },
-                                    enabled = !loginLoading,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(44.dp)
-                                        .shadow(
-                                            elevation = 6.dp,
-                                            shape = RoundedCornerShape(50),
-                                            ambientColor = StockAppColors.SoftGlowCyan.copy(alpha = 0.2f),
-                                            spotColor = StockAppColors.SoftGlowCyan.copy(alpha = 0.35f)
-                                        ),
-                                    shape = RoundedCornerShape(50),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = StockAppColors.AccentCyan,
-                                        disabledContainerColor = StockAppColors.DisabledSurface
-                                    )
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Login,
-                                        contentDescription = null,
-                                        tint = StockAppColors.TextPrimary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Login",
-                                        color = StockAppColors.TextPrimary,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-
-                                OutlinedButton(
-                                    onClick = {
-                                        val nowMs = SystemClock.elapsedRealtime()
-                                        if (nowMs - lastModeSwitchActionAtMs < 300L) return@OutlinedButton
-                                        lastModeSwitchActionAtMs = nowMs
-                                        showLoginInputError = false
-                                        createAccountError = null
-                                        onInputChanged()
-                                        isCreateAccountMode = true
-                                    },
-                                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                                    shape = RoundedCornerShape(10.dp),
-                                    border = BorderStroke(1.dp, StockAppColors.CardBorder),
-                                    colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = StockAppColors.CardSurface,
-                                        contentColor = StockAppColors.AccentCyan
-                                    )
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.PersonAdd,
-                                        contentDescription = null,
-                                        tint = StockAppColors.AccentCyan,
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .padding(end = 6.dp)
-                                    )
-                                    Text(
-                                        text = "Create Account",
-                                        color = StockAppColors.AccentCyan,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                                SecondaryActionButton("Back To Login", Icons.Filled.ArrowBack, !createLoading) {
+                                    if (shouldThrottle()) return@SecondaryActionButton
+                                    switchMode(AuthMode.LOGIN)
                                 }
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
                 }
-
-            FooterBranding()
+                Spacer(modifier = Modifier.height(40.dp))
+            }
         }
+        FooterBranding(modifier = Modifier.align(Alignment.BottomCenter))
     }
+}
+
 @Composable
-private fun AuthFieldLabel(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String
+private fun PrimaryActionButton(
+    text: String,
+    icon: ImageVector,
+    enabled: Boolean,
+    containerColor: Color = StockAppColors.AccentCyan,
+    buttonHeight: Dp = 42.dp,
+    onClick: () -> Unit
 ) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(buttonHeight)
+            .shadow(4.dp, RoundedCornerShape(50)),
+        shape = RoundedCornerShape(50),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = containerColor,
+            disabledContainerColor = StockAppColors.DisabledSurface
+        )
+    ) {
+        Icon(icon, contentDescription = null, tint = StockAppColors.TextPrimary, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(text = text, color = StockAppColors.TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun SecondaryActionButton(
+    text: String,
+    icon: ImageVector,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp),
+        shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, StockAppColors.CardBorder),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = Color.Transparent,
+            contentColor = StockAppColors.AccentCyan
+        )
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = StockAppColors.AccentCyan,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(text = text, color = StockAppColors.AccentCyan, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun ErrorText(text: String) {
+    Text(text = text, color = StockAppColors.Danger, fontSize = 13.sp)
+}
+
+@Composable
+private fun AuthFieldLabel(icon: ImageVector, label: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Box(
-            modifier = Modifier.size(16.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = StockAppColors.AccentCyan,
-                modifier = Modifier.size(16.dp)
-            )
+        Box(modifier = Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = StockAppColors.AccentCyan, modifier = Modifier.size(16.dp))
         }
-        Text(
-            text = label,
-            color = StockAppColors.TextSecondary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
+        Text(text = label, color = StockAppColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
+}
+
+private fun looksLikeEmail(value: String): Boolean {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return false
+    val atIndex = trimmed.indexOf('@')
+    val dotIndex = trimmed.lastIndexOf('.')
+    return atIndex > 0 && dotIndex > atIndex + 1 && dotIndex < trimmed.lastIndex
 }

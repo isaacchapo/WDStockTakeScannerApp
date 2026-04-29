@@ -20,7 +20,30 @@ data class StockUploadItemDto(
     @SerializedName("variableData")
     val variableData: String,
     @SerializedName("ownerUid")
-    val ownerUid: String
+    val ownerUid: String,
+    @SerializedName("uid")
+    val uid: String,
+    @SerializedName("password")
+    val password: String
+)
+
+data class UnifiedStockUploadRequest(
+    @SerializedName("action")
+    val action: String,
+    @SerializedName("payload")
+    val payload: StockUploadItemDto
+)
+
+data class UnifiedStockBulkPayload(
+    @SerializedName("items")
+    val items: List<StockUploadItemDto>
+)
+
+data class UnifiedStockBulkUploadRequest(
+    @SerializedName("action")
+    val action: String,
+    @SerializedName("payload")
+    val payload: UnifiedStockBulkPayload
 )
 
 data class StockInventoryUploadResponse(

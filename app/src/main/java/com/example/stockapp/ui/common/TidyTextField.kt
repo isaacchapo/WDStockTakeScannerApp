@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -26,6 +27,7 @@ fun TidyTextField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
+    fieldHeight: Dp = 42.dp,
     enabled: Boolean = true,
     matchCardSurface: Boolean = false,
     visualTransformation: VisualTransformation = VisualTransformation.None,
@@ -39,7 +41,7 @@ fun TidyTextField(
     }
     Row(
         modifier = modifier
-            .height(42.dp)
+            .height(fieldHeight)
             .background(
                 if (enabled) backgroundColor else StockAppColors.DisabledSurface,
                 RoundedCornerShape(50)

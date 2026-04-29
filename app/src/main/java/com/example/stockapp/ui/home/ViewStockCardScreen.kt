@@ -17,9 +17,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -27,6 +29,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -197,6 +200,8 @@ fun ViewStockCardScreen(
     var pendingUploadItems by remember { mutableStateOf<List<StockItem>>(emptyList()) }
     var isUploading by remember { mutableStateOf(false) }
     var isSavingDevice by remember { mutableStateOf(false) }
+    var isDeletingDevice by remember { mutableStateOf(false) }
+    var devicePendingDeletion by remember { mutableStateOf<UploadDevice?>(null) }
     var showUploadSuccessDialog by remember { mutableStateOf(false) }
 
     fun toggleGroupSelection(groupKey: String) {
@@ -275,106 +280,112 @@ fun ViewStockCardScreen(
     ) {
                 // Top Bar
                 val topBarBrush = remember {
-                    Brush.horizontalGradient(
+                    Brush.verticalGradient(
                         colors = listOf(
                             StockAppColors.NavyMid,
-                            StockAppColors.NavyBase,
-                            StockAppColors.NavyDeep
+                            StockAppColors.NavyBase
                         )
                     )
                 }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(topBarBrush)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                androidx.compose.material3.Surface(
+                    tonalElevation = 4.dp,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    IconButton(
-                        onClick = {
-                            if (openedGroup != null) {
-                                openedGroupKey = null
-                            } else {
-                                onBack()
-                            }
-                        },
+                    Box(
                         modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .size(34.dp)
+                            .fillMaxWidth()
+                            .background(topBarBrush)
+                            .statusBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = StockAppColors.TextPrimary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    Text(
-                        text = when {
-                            openedGroup != null && shareMode -> "SHARE ITEMS"
-                            openedGroup != null -> "STOCK ITEMS"
-                            shareMode -> "SHARE STOCKS"
-                            else -> "STOCK TAKE"
-                        },
-                        color = StockAppColors.TextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-
-                    if (openedGroup == null && selectedGroupKeys.isNotEmpty()) {
-                        TextButton(
+                        IconButton(
                             onClick = {
-                                selectedGroupKeys = allGroupKeys
-                            },
-                            enabled = inventoryGroups.isNotEmpty(),
-                            modifier = Modifier.align(Alignment.CenterEnd)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(12.dp)
-                                        .clip(RoundedCornerShape(50))
-                                        .background(
-                                            if (isAllSelected) {
-                                                StockAppColors.AccentCyan
-                                            } else {
-                                                Color.Transparent
-                                            }
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (inventoryGroups.isNotEmpty()) {
-                                                StockAppColors.AccentCyan
-                                            } else {
-                                                StockAppColors.DisabledText
-                                            },
-                                            RoundedCornerShape(50)
-                                        )
-                                ) {
-                                    if (isAllSelected) {
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.Center)
-                                                .size(5.dp)
-                                                .clip(RoundedCornerShape(50))
-                                                .background(StockAppColors.NavyDeep)
-                                        )
-                                    }
+                                if (openedGroup != null) {
+                                    openedGroupKey = null
+                                } else {
+                                    onBack()
                                 }
-                                Text(
-                                    text = "All",
-                                    color = if (inventoryGroups.isNotEmpty()) {
-                                        StockAppColors.AccentCyan
-                                    } else {
-                                        StockAppColors.DisabledText
-                                    },
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                            },
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = StockAppColors.TextPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Text(
+                            text = when {
+                                openedGroup != null && shareMode -> "SHARE ITEMS"
+                                openedGroup != null -> "STOCK ITEMS"
+                                shareMode -> "SHARE STOCKS"
+                                else -> "STOCK TAKE"
+                            },
+                            color = StockAppColors.TextPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+
+                        if (openedGroup == null && selectedGroupKeys.isNotEmpty()) {
+                            TextButton(
+                                onClick = {
+                                    selectedGroupKeys = allGroupKeys
+                                },
+                                enabled = inventoryGroups.isNotEmpty(),
+                                modifier = Modifier.align(Alignment.CenterEnd)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(
+                                                if (isAllSelected) {
+                                                    StockAppColors.AccentCyan
+                                                } else {
+                                                    Color.Transparent
+                                                }
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (inventoryGroups.isNotEmpty()) {
+                                                    StockAppColors.AccentCyan
+                                                } else {
+                                                    StockAppColors.DisabledText
+                                                },
+                                                RoundedCornerShape(50)
+                                            )
+                                    ) {
+                                        if (isAllSelected) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.Center)
+                                                    .size(5.dp)
+                                                    .clip(RoundedCornerShape(50))
+                                                    .background(StockAppColors.NavyDeep)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = "All",
+                                        color = if (inventoryGroups.isNotEmpty()) {
+                                            StockAppColors.AccentCyan
+                                        } else {
+                                            StockAppColors.DisabledText
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     }
@@ -460,7 +471,7 @@ fun ViewStockCardScreen(
                                     .height(IntrinsicSize.Min),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                TableCell("No", 0.3f, isHeader = true, textColor = StockAppColors.TextPrimary)
+                                TableCell("No", 0.4f, isHeader = true, textColor = StockAppColors.TextPrimary, textAlign = TextAlign.Center)
                                 TableCell(tableColumns[0], 1f, isHeader = true, textColor = StockAppColors.TextPrimary)
                                 TableCell(tableColumns[1], 1.2f, isHeader = true, textColor = StockAppColors.TextPrimary)
                                 TableCell(tableColumns[2], 1f, isHeader = true, textColor = StockAppColors.TextPrimary)
@@ -507,7 +518,7 @@ fun ViewStockCardScreen(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                TableCell((index + 1).toString(), 0.3f)
+                                                TableCell((index + 1).toString(), 0.4f, textAlign = TextAlign.Center)
                                                 TableCell(tableValues.getOrElse(0) { "-" }, 1f)
                                                 TableCell(tableValues.getOrElse(1) { "-" }, 1.2f)
                                                 TableCell(tableValues.getOrElse(2) { "-" }, 1f)
@@ -547,7 +558,8 @@ fun ViewStockCardScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 10.dp),
+                            .navigationBarsPadding()
+                            .padding(top = 10.dp, bottom = 12.dp),
                         horizontalArrangement = Arrangement.Center
                     ) {
                         if (shareMode) {
@@ -712,7 +724,9 @@ fun ViewStockCardScreen(
                             UploadDeviceRow(
                                 device = device,
                                 isSelected = selectedUploadDeviceKey == device.nameNormalized,
-                                onSelect = { selectedUploadDeviceKey = device.nameNormalized }
+                                onSelect = { selectedUploadDeviceKey = device.nameNormalized },
+                                onDelete = { devicePendingDeletion = device },
+                                deleteEnabled = !isUploading && !isDeletingDevice
                             )
                         }
                     }
@@ -820,17 +834,66 @@ fun ViewStockCardScreen(
                         showUpdateGroupDialog = false
                     },
                     enabled = updateLocation.isNotBlank()
-                ,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = StockAppColors.AccentAmber,
-                        disabledContainerColor = StockAppColors.DisabledSurface,
-                        contentColor = StockAppColors.TextPrimary,
-                        disabledContentColor = StockAppColors.DisabledText
-                    )
                 ) { Text("Save") }
             },
             dismissButton = {
                 TextButton(onClick = { showUpdateGroupDialog = false }) {
+                    Text("Cancel", color = StockAppColors.TextSecondary)
+                }
+            },
+            containerColor = StockAppColors.CardSurface,
+            titleContentColor = StockAppColors.TextPrimary,
+            textContentColor = StockAppColors.TextSecondary
+        )
+    }
+
+    devicePendingDeletion?.let { device ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!isDeletingDevice) {
+                    devicePendingDeletion = null
+                }
+            },
+            title = { Text("Delete Device", color = StockAppColors.TextPrimary) },
+            text = {
+                Text(
+                    text = "Delete ${device.name} from saved devices?",
+                    color = StockAppColors.TextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !isDeletingDevice,
+                    onClick = {
+                        isDeletingDevice = true
+                        stockViewModel.deleteUploadDevice(device.nameNormalized) { result ->
+                            isDeletingDevice = false
+                            if (result.isSuccess) {
+                                if (selectedUploadDeviceKey == device.nameNormalized) {
+                                    selectedUploadDeviceKey = uploadDevices
+                                        .firstOrNull { it.nameNormalized != device.nameNormalized }
+                                        ?.nameNormalized
+                                }
+                                devicePendingDeletion = null
+                            } else {
+                                val err = result.exceptionOrNull()
+                                Toast.makeText(
+                                    context,
+                                    err?.message ?: "Failed to delete device.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                ) {
+                    Text("Delete", color = StockAppColors.AccentAmber)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { devicePendingDeletion = null },
+                    enabled = !isDeletingDevice
+                ) {
                     Text("Cancel", color = StockAppColors.TextSecondary)
                 }
             },
@@ -895,7 +958,9 @@ private fun BottomActionButton(
 private fun UploadDeviceRow(
     device: UploadDevice,
     isSelected: Boolean,
-    onSelect: () -> Unit
+    onSelect: () -> Unit,
+    onDelete: () -> Unit,
+    deleteEnabled: Boolean
 ) {
     Row(
         modifier = Modifier
@@ -921,6 +986,17 @@ private fun UploadDeviceRow(
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(
+            onClick = onDelete,
+            enabled = deleteEnabled,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = "Delete ${device.name}",
+                tint = if (deleteEnabled) StockAppColors.AccentAmber else StockAppColors.DisabledText
             )
         }
     }

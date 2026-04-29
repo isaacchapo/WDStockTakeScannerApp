@@ -15,8 +15,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.stockapp.StockApplication
-import com.example.stockapp.ui.common.SoftInputAdjustNothingMode
-import com.example.stockapp.ui.common.SoftInputAdjustResizeMode
+import com.example.stockapp.ui.common.SoftInputAdjustPanMode
 import com.example.stockapp.ui.common.StockAppBackground
 import com.example.stockapp.ui.common.WindowSoftInputModeEffect
 import com.example.stockapp.ui.home.CreateStockCardScreen
@@ -37,11 +36,7 @@ fun Navigation() {
 
     var navigationInProgress by remember { mutableStateOf(false) }
 
-    val softInputMode = when (currentBackStackEntry?.destination?.route) {
-        "root" -> SoftInputAdjustNothingMode
-        "create_stock/{uid}" -> SoftInputAdjustNothingMode
-        else -> SoftInputAdjustResizeMode
-    }
+    val softInputMode = SoftInputAdjustPanMode
 
     WindowSoftInputModeEffect(softInputMode)
 
@@ -133,10 +128,10 @@ fun Navigation() {
                             showError = false
                             stockViewModel.resetLoginResult()
                         },
-                        onCreateAccount = { uid, password, onComplete ->
+                        onCreateAccount = { uid, email, password, securityKey, onComplete ->
                             showError = false
                             stockViewModel.resetLoginResult()
-                            stockViewModel.createUser(uid, password, onComplete)
+                            stockViewModel.createUser(uid, email, password, securityKey, onComplete)
                         },
                         showError = showError,
                         loginLoading = loginInProgress,

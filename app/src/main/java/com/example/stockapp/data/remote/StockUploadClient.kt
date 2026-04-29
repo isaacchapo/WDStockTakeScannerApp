@@ -30,7 +30,10 @@ class StockUploadClient {
         const val TAG = "StockUploadClient"
         const val HOST_REACHABILITY_TIMEOUT_MS = 4000
         const val ENABLE_UPLOAD_DEBUG_LOGS = false
-        const val BULK_UPLOAD_PATH_SUFFIX = "/p/p/bulk"
+        const val UNIFIED_APP_PATH_SUFFIX = "/api/app"
+        const val UNIFIED_APP_BULK_PATH_SUFFIX = "/api/app/bulk"
+        const val UNIFIED_ACTION_STOCK_POST = "p/p"
+        const val UNIFIED_ACTION_STOCK_BULK = "p/p/bulk"
     }
 
     private val gson = Gson()
@@ -127,10 +130,10 @@ class StockUploadClient {
             return Result.failure(reachabilityError)
         }
 
-        val isBulkUpload = isBulkUploadPath(parsedUrl.encodedPath)
+        val useBulkUpload = isUnifiedAppEndpoint(parsedUrl.encodedPath) && items.size > 1
 
         return try {
-            if (isBulkUpload) {
+            if (useBulkUpload) {
                 if (ENABLE_UPLOAD_DEBUG_LOGS) {
                     Log.d(TAG, "Bulk uploading ${items.size} items to $uploadUrl")
                     Log.d(TAG, "Bulk payload: ${gson.toJson(items)}")
@@ -147,8 +150,6 @@ class StockUploadClient {
             }
 
             var lastSuccessMessage = "Stock data uploaded successfully."
-
-            // Upload items one by one because the server expects a single object, not an array
             items.forEachIndexed { index, item ->
                 if (ENABLE_UPLOAD_DEBUG_LOGS) {
                     Log.d(TAG, "Uploading item ${index + 1}/${items.size} to $uploadUrl")
@@ -196,9 +197,13 @@ class StockUploadClient {
         policy: UploadPolicy
     ): Result<String> {
         var attempt = 0
+        val request = UnifiedStockBulkUploadRequest(
+            action = UNIFIED_ACTION_STOCK_BULK,
+            payload = UnifiedStockBulkPayload(items = items)
+        )
         while (true) {
             try {
-                val response = api.uploadInventoryBulk(uploadUrl, apiKey, items)
+                val response = api.uploadInventoryBulk(uploadUrl, apiKey, request)
                 if (response.isSuccessful) {
                     val successMessage = parseSuccessMessage(response)
                     return Result.success(
@@ -249,9 +254,13 @@ class StockUploadClient {
         totalItems: Int
     ): Result<String> {
         var attempt = 0
+        val request = UnifiedStockUploadRequest(
+            action = UNIFIED_ACTION_STOCK_POST,
+            payload = item
+        )
         while (true) {
             try {
-                val response = api.uploadInventory(uploadUrl, apiKey, item)
+                val response = api.uploadInventory(uploadUrl, apiKey, request)
                 if (response.isSuccessful) {
                     return Result.success(parseSuccessMessage(response))
                 }
@@ -337,9 +346,12 @@ class StockUploadClient {
         return maxDelayMs.coerceAtMost(max(exponential, baseDelayMs))
     }
 
-    private fun isBulkUploadPath(rawPath: String): Boolean {
+    private fun isUnifiedAppEndpoint(rawPath: String): Boolean {
         val normalized = rawPath.trim().trimEnd('/').lowercase(Locale.ROOT)
-        return normalized == BULK_UPLOAD_PATH_SUFFIX || normalized.endsWith(BULK_UPLOAD_PATH_SUFFIX)
+        return normalized == UNIFIED_APP_PATH_SUFFIX ||
+            normalized.endsWith(UNIFIED_APP_PATH_SUFFIX) ||
+            normalized == UNIFIED_APP_BULK_PATH_SUFFIX ||
+            normalized.endsWith(UNIFIED_APP_BULK_PATH_SUFFIX)
     }
 
     private suspend fun verifyHostReachable(uploadUrl: HttpUrl): Result<Unit> = withContext(Dispatchers.IO) {

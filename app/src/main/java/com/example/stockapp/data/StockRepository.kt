@@ -91,6 +91,12 @@ class StockRepository(
         }
     }
 
+    suspend fun deleteUploadDevice(ownerUid: String, nameNormalized: String) {
+        withContext(ioDispatcher) {
+            uploadDeviceDao.deleteUploadDevice(ownerUid, nameNormalized)
+        }
+    }
+
     /**
      * Inserts a stock item into the database.
      * @param stockItem The stock item to be inserted.
@@ -266,10 +272,13 @@ class StockRepository(
         endpointPath: String,
         apiKey: String,
         ownerUid: String,
+        userPassword: String,
         stockItems: List<StockItem>,
         onProgress: suspend (current: Int, total: Int) -> Unit = { _, _ -> }
     ): Result<String> {
         return withContext(ioDispatcher) {
+            val trimmedOwnerUid = ownerUid.trim()
+            val trimmedPassword = userPassword.trim()
             val scopedItems = stockItems.filter { it.ownerUid.isBlank() || it.ownerUid == ownerUid }
             if (scopedItems.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("No stock items found to upload."))
@@ -277,12 +286,19 @@ class StockRepository(
             if (apiKey.isBlank()) {
                 return@withContext Result.failure(IllegalArgumentException("API key is required for upload."))
             }
+            if (trimmedOwnerUid.isBlank() || trimmedPassword.isBlank()) {
+                return@withContext Result.failure(
+                    IllegalArgumentException("Active UID and password are required for upload.")
+                )
+            }
 
             val normalizedEndpointPath = normalizeUploadEndpointPath(endpointPath)
             val urlResult = stockUploadClient.buildUploadUrl(baseUrl, normalizedEndpointPath)
             val uploadUrl = urlResult.getOrElse { return@withContext Result.failure(it) }
 
-            val itemPayload = scopedItems.map { item -> item.toUploadDto(ownerUid) }
+            val itemPayload = scopedItems.map { item ->
+                item.toUploadDto(ownerUid = trimmedOwnerUid, password = trimmedPassword)
+            }
             stockUploadClient.uploadInventory(
                 uploadUrl = uploadUrl,
                 items = itemPayload,
@@ -297,14 +313,40 @@ class StockRepository(
      * @param uid The unique identifier for the user.
      * @param password The user's password.
      */
-    suspend fun createUser(uid: String, password: String): Boolean {
+    suspend fun createUser(
+        uid: String,
+        email: String,
+        password: String,
+        securityKey: String
+    ): Result<Unit> {
         return withContext(ioDispatcher) {
             val trimmedUid = uid.trim()
-            if (trimmedUid.isBlank()) return@withContext false
-            if (userDao.userExists(trimmedUid)) return@withContext false
-            val passwordHash = withContext(defaultDispatcher) { hashPassword(password) }
+            val trimmedEmail = email.trim()
+            val trimmedPassword = password.trim()
+            val trimmedSecurityKey = securityKey.trim()
+            if (trimmedUid.isBlank() || trimmedEmail.isBlank() || trimmedPassword.isBlank()) {
+                return@withContext Result.failure(
+                    IllegalArgumentException("UID, email, and password are required.")
+                )
+            }
+            if (!looksLikeEmail(trimmedEmail)) {
+                return@withContext Result.failure(
+                    IllegalArgumentException("A valid email address is required.")
+                )
+            }
+            if (trimmedSecurityKey != REQUIRED_CREATE_ACCOUNT_SECURITY_KEY) {
+                return@withContext Result.failure(
+                    SecurityException("Invalid security key.")
+                )
+            }
+            if (userDao.userExists(trimmedUid)) {
+                return@withContext Result.failure(
+                    IllegalStateException("That UID already exists. Use a different UID.")
+                )
+            }
+            val passwordHash = withContext(defaultDispatcher) { hashPassword(trimmedPassword) }
             userDao.insert(User(uid = trimmedUid, passwordHash = passwordHash))
-            true
+            Result.success(Unit)
         }
     }
 
@@ -359,6 +401,7 @@ class StockRepository(
     }
 
     private companion object {
+        private const val REQUIRED_CREATE_ACCOUNT_SECURITY_KEY = "stock123"
         private val HEX_CHARS = charArrayOf(
             '0', '1', '2', '3', '4', '5', '6', '7',
             '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
@@ -366,7 +409,7 @@ class StockRepository(
     }
 }
 
-private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
+private fun StockItem.toUploadDto(ownerUid: String, password: String): StockUploadItemDto {
     val resolvedUid = ownerUid.ifBlank { this.ownerUid }
     return StockUploadItemDto(
         id = id,
@@ -376,12 +419,14 @@ private fun StockItem.toUploadDto(ownerUid: String): StockUploadItemDto {
         location = location,
         stockName = stockName,
         dateScanned = dateScanned,
-        variableData = enrichVariableData(variableData, sid, resolvedUid),
-        ownerUid = resolvedUid
+        variableData = enrichVariableData(variableData, sid, resolvedUid, password),
+        ownerUid = resolvedUid,
+        uid = resolvedUid,
+        password = password
     )
 }
 
-private fun enrichVariableData(variableData: String, sid: String, uid: String): String {
+private fun enrichVariableData(variableData: String, sid: String, uid: String, password: String): String {
     if (variableData.isBlank()) return variableData
     if (sid.isBlank() && uid.isBlank()) return variableData
 
@@ -399,6 +444,11 @@ private fun enrichVariableData(variableData: String, sid: String, uid: String): 
         }
         if (uid.isNotBlank() && "uid" !in normalizedKeys && "owneruid" !in normalizedKeys) {
             json.put("UID", uid)
+            normalizedKeys.add("uid")
+        }
+        val uidPresent = "uid" in normalizedKeys || "owneruid" in normalizedKeys
+        if (uidPresent && password.isNotBlank() && "password" !in normalizedKeys) {
+            json.put("Password", password)
         }
 
         json.toString()
@@ -422,12 +472,25 @@ private fun normalizeUploadEndpointPath(rawPath: String): String {
 
     return when {
         normalized.equals(LEGACY_UPLOAD_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_UPLOAD_ENDPOINT_PATH
-        normalized.equals(LEGACY_UPLOAD_BULK_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_BULK_UPLOAD_ENDPOINT_PATH
+        normalized.equals(LEGACY_UPLOAD_BULK_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_UPLOAD_ENDPOINT_PATH
+        normalized.equals(LEGACY_PREFERRED_UPLOAD_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_UPLOAD_ENDPOINT_PATH
+        normalized.equals(LEGACY_PREFERRED_BULK_UPLOAD_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_UPLOAD_ENDPOINT_PATH
+        normalized.equals(LEGACY_UNIFIED_BULK_ENDPOINT_PATH, ignoreCase = true) -> PREFERRED_UPLOAD_ENDPOINT_PATH
         else -> normalized
     }
 }
 
+private fun looksLikeEmail(value: String): Boolean {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return false
+    val atIndex = trimmed.indexOf('@')
+    val dotIndex = trimmed.lastIndexOf('.')
+    return atIndex > 0 && dotIndex > atIndex + 1 && dotIndex < trimmed.lastIndex
+}
+
 private const val LEGACY_UPLOAD_ENDPOINT_PATH = "/api/stock/upload"
 private const val LEGACY_UPLOAD_BULK_ENDPOINT_PATH = "/api/stock/upload/bulk"
-private const val PREFERRED_UPLOAD_ENDPOINT_PATH = "/p/p"
-private const val PREFERRED_BULK_UPLOAD_ENDPOINT_PATH = "/p/p/bulk"
+private const val LEGACY_PREFERRED_UPLOAD_ENDPOINT_PATH = "/p/p"
+private const val LEGACY_PREFERRED_BULK_UPLOAD_ENDPOINT_PATH = "/p/p/bulk"
+private const val LEGACY_UNIFIED_BULK_ENDPOINT_PATH = "/api/app/bulk"
+private const val PREFERRED_UPLOAD_ENDPOINT_PATH = "/api/app"
