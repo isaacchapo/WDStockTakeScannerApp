@@ -3,10 +3,13 @@ package com.example.stockapp.ui.sharing
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
+import com.example.stockapp.R
 import com.example.stockapp.data.QrDataParser
 import com.example.stockapp.data.local.StockItem
 import java.io.File
@@ -46,12 +49,11 @@ private data class ParsedSchemaRecord(
 
 private data class PdfDocumentGroup(
     val location: String,
-    val uid: String,
+    val stockName: String,
     val sections: List<PdfTableSection>
 )
 
 private data class PdfTableSection(
-    val title: String,
     val columns: List<String>,
     val rows: List<List<String>>
 )
@@ -76,47 +78,71 @@ private fun generateSchemaPdf(
             fields = extractQrFields(item.variableData)
         )
     }
-    val exportedAt = System.currentTimeMillis()
     val documentGroups = buildPdfSections(parsedRecords)
 
     val pageWidth = 595
     val pageHeight = 842
     val margin = 24f
-    val titleRowHeight = 30f
-    val headerRowHeight = 24f
-    val bodyRowHeight = 22f
-    val metadataRowHeight = 28f
-    val sectionTitleHeight = 22f
+    val headerRowHeight = 28f
+    val bodyRowHeight = 24f
     val sectionGap = 10f
     val tableWidth = pageWidth - (margin * 2f)
+    val headerLogoMaxWidth = 150f
+    val headerLogoMaxHeight = 56f
+    val headerTextGap = 10f
+    val headerBottomGap = 16f
+    val detailsBottomGap = 8f
+    val detailsTextHeight = 14f
+    val cellHorizontalPadding = 6f
+    val cellVerticalPadding = 4f
+    val footerLineTopPadding = 8f
+    val footerLineBottomPadding = 8f
+    val footerTextBottomPadding = 10f
+    val footerReservedHeight = footerLineTopPadding + footerLineBottomPadding + 12f + footerTextBottomPadding
+    val contentBottomLimit = pageHeight - margin - footerReservedHeight
 
-    val titlePaint = Paint().apply {
+    val companyNamePaint = Paint().apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        textSize = 12f
+        textSize = 14f
         isAntiAlias = true
+        color = 0xFF000000.toInt()
     }
     val headerPaint = Paint().apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        textSize = 10f
+        textSize = 9.5f
         isAntiAlias = true
+        color = 0xFFFFFFFF.toInt()
     }
     val bodyPaint = Paint().apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
-        textSize = 9f
+        textSize = 8.7f
+        letterSpacing = 0.01f
         isAntiAlias = true
+        color = 0xFF1F2933.toInt()
     }
-    val metadataPaint = Paint().apply {
+    val keyCellPaint = Paint(bodyPaint).apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        textSize = 10f
-        isAntiAlias = true
     }
     val strokePaint = Paint().apply {
         style = Paint.Style.STROKE
-        strokeWidth = 1f
+        strokeWidth = 0.8f
+    }
+    val footerPaint = Paint().apply {
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+        textSize = 10f
+        isAntiAlias = true
+        color = 0xFF455A64.toInt()
+    }
+    val detailsPaint = Paint().apply {
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+        textSize = 10f
+        isAntiAlias = true
+        color = 0xFF263238.toInt()
     }
     val fillPaint = Paint().apply {
         style = Paint.Style.FILL
     }
+    val headerLogoBitmap = BitmapFactory.decodeResource(context.resources, R.drawable.logo)
 
     val document = PdfDocument()
     var pageNumber = 0
@@ -156,41 +182,11 @@ private fun generateSchemaPdf(
     fun calculateRowHeight(values: List<String>, columnWidths: List<Float>, paint: Paint): Float {
         var maxHeight = bodyRowHeight
         values.forEachIndexed { index, value ->
-            val wrapped = wrapText(value, paint, columnWidths[index] - 10f)
-            val height = wrapped.size * (paint.textSize * 1.2f) + 8f
+            val wrapped = wrapText(value, paint, columnWidths[index] - (cellHorizontalPadding * 2f))
+            val height = wrapped.size * (paint.textSize * 1.25f) + (cellVerticalPadding * 2f)
             if (height > maxHeight) maxHeight = height
         }
         return maxHeight
-    }
-
-    fun drawMergedRow(
-        text: String,
-        top: Float,
-        height: Float,
-        textPaint: Paint,
-        backgroundColor: Int,
-        textColor: Int,
-        centered: Boolean = false
-    ) {
-        fillPaint.color = backgroundColor
-        canvas.drawRect(margin, top, margin + tableWidth, top + height, fillPaint)
-        strokePaint.color = 0xFFB0BEC5.toInt()
-        canvas.drawRect(margin, top, margin + tableWidth, top + height, strokePaint)
-
-        textPaint.color = textColor
-        val wrappedLines = wrapText(text, textPaint, tableWidth - 16f)
-        val totalTextHeight = wrappedLines.size * (textPaint.textSize * 1.2f)
-        var currentY = top + (height - totalTextHeight) / 2f - textPaint.ascent()
-
-        wrappedLines.forEach { line ->
-            val startX = if (centered) {
-                margin + (tableWidth - textPaint.measureText(line)) / 2f
-            } else {
-                margin + 8f
-            }
-            canvas.drawText(line, startX, currentY, textPaint)
-            currentY += textPaint.textSize * 1.2f
-        }
     }
 
     fun calculateColumnWidths(columns: List<String>, allRows: List<List<String>>, paint: Paint): List<Float> {
@@ -199,12 +195,16 @@ private fun generateSchemaPdf(
         val maxWidths = FloatArray(numCols) { 0f }
 
         columns.forEachIndexed { i, col ->
-            maxWidths[i] = paint.measureText(col) + 20f
+            maxWidths[i] = when {
+                isCompactColumn(col) -> paint.measureText(col) + 28f
+                else -> paint.measureText(col) + 22f
+            }
         }
         allRows.forEach { row ->
             row.forEachIndexed { i, value ->
                 if (i < numCols) {
-                    val measure = paint.measureText(value.take(30)) + 20f
+                    val sample = value.replace('\n', ' ').trim().take(42)
+                    val measure = paint.measureText(sample) + if (isCompactColumn(columns[i])) 26f else 22f
                     if (measure > maxWidths[i]) maxWidths[i] = measure
                 }
             }
@@ -220,100 +220,153 @@ private fun generateSchemaPdf(
         return adjustedWidths.map { (it / adjustedTotal) * tableWidth }
     }
 
+    fun drawWrappedCellText(
+        text: String,
+        x: Float,
+        top: Float,
+        width: Float,
+        height: Float,
+        paint: Paint,
+        centered: Boolean
+    ) {
+        val wrapped = wrapText(text, paint, width - (cellHorizontalPadding * 2f))
+        val lineHeight = paint.textSize * 1.25f
+        val totalTextHeight = wrapped.size * lineHeight
+        var currentY = top + ((height - totalTextHeight) / 2f) - paint.ascent()
+
+        wrapped.forEach { line ->
+            val drawX = if (centered) {
+                x + (width - paint.measureText(line)) / 2f
+            } else {
+                x + cellHorizontalPadding
+            }
+            canvas.drawText(line, drawX, currentY, paint)
+            currentY += lineHeight
+        }
+    }
+
     fun drawHeader(columns: List<String>, columnWidths: List<Float>, top: Float) {
         var x = margin
         columns.forEachIndexed { index, rawColumn ->
             val columnWidth = columnWidths[index]
-            fillPaint.color = 0xFF0A4A99.toInt()
+            fillPaint.color = 0xFF314553.toInt()
             canvas.drawRect(x, top, x + columnWidth, top + headerRowHeight, fillPaint)
-            strokePaint.color = 0xFFFFFFFF.toInt()
+            strokePaint.color = 0xFF23313B.toInt()
             canvas.drawRect(x, top, x + columnWidth, top + headerRowHeight, strokePaint)
 
             val headerLabel = rawColumn.uppercase()
-            headerPaint.color = 0xFFFFFFFF.toInt()
-            val wrapped = wrapText(headerLabel, headerPaint, columnWidth - 8f)
-            val baseline = top + (headerRowHeight / 2f) - ((headerPaint.descent() + headerPaint.ascent()) / 2f)
-            // Header is single line for simplicity, but uses wrap logic to truncate if still too long
-            canvas.drawText(wrapped.first().take(((columnWidth - 8f) / 6f).toInt().coerceAtLeast(1)), x + 5f, baseline, headerPaint)
+            drawWrappedCellText(
+                text = headerLabel,
+                x = x,
+                top = top,
+                width = columnWidth,
+                height = headerRowHeight,
+                paint = headerPaint,
+                centered = true
+            )
             x += columnWidth
         }
-    }
-
-    fun drawSectionTitle(text: String, top: Float) {
-        drawMergedRow(
-            text = text,
-            top = top,
-            height = sectionTitleHeight,
-            textPaint = metadataPaint,
-            backgroundColor = 0xFFF3F7FC.toInt(),
-            textColor = 0xFF34506B.toInt()
-        )
     }
 
     fun drawBodyRow(values: List<String>, columnWidths: List<Float>, top: Float, height: Float, rowIndex: Int) {
         var x = margin
         values.forEachIndexed { index, rawValue ->
             val columnWidth = columnWidths[index]
-            fillPaint.color = if (rowIndex % 2 == 0) 0xFFF8FBFF.toInt() else 0xFFF2F7FF.toInt()
+            val isCompact = index < columnWidths.size && isCompactColumnIndex(index, values.size)
+            fillPaint.color = when {
+                isCompact && rowIndex % 2 == 0 -> 0xFFEFF3F6.toInt()
+                isCompact -> 0xFFE6ECEF.toInt()
+                rowIndex % 2 == 0 -> 0xFFFFFFFF.toInt()
+                else -> 0xFFF6F8FA.toInt()
+            }
             canvas.drawRect(x, top, x + columnWidth, top + height, fillPaint)
-            strokePaint.color = 0xFFDCE6F1.toInt()
+            strokePaint.color = 0xFFD4DCE2.toInt()
             canvas.drawRect(x, top, x + columnWidth, top + height, strokePaint)
 
             val textValue = rawValue.trim()
-            bodyPaint.color = 0xFF263238.toInt()
-            val wrapped = wrapText(textValue, bodyPaint, columnWidth - 10f)
-            var currentY = top + 4f - bodyPaint.ascent()
-            wrapped.forEach { line ->
-                if (currentY - top + bodyPaint.descent() < height) {
-                    canvas.drawText(line, x + 5f, currentY, bodyPaint)
-                    currentY += bodyPaint.textSize * 1.2f
-                }
-            }
+            val textPaint = if (isCompact) keyCellPaint else bodyPaint
+            drawWrappedCellText(
+                text = textValue,
+                x = x,
+                top = top,
+                width = columnWidth,
+                height = height,
+                paint = textPaint,
+                centered = isCompact
+            )
             x += columnWidth
         }
     }
 
-    fun startNewPage(group: PdfDocumentGroup) {
+    fun drawDocumentHeader(top: Float): Float {
+        var currentY = top
+        headerLogoBitmap?.let { bitmap ->
+            val widthScale = headerLogoMaxWidth / bitmap.width.toFloat()
+            val heightScale = headerLogoMaxHeight / bitmap.height.toFloat()
+            val appliedScale = minOf(widthScale, heightScale, 1f)
+            val drawWidth = bitmap.width * appliedScale
+            val drawHeight = bitmap.height * appliedScale
+            val left = margin + (tableWidth - drawWidth) / 2f
+            val destination = RectF(left, currentY, left + drawWidth, currentY + drawHeight)
+            canvas.drawBitmap(bitmap, null, destination, null)
+            currentY += drawHeight + headerTextGap
+        }
+
+        val companyName = "METAL FABRICATORS OF ZAMBIA PLC"
+        val baseline = currentY - companyNamePaint.ascent()
+        val textX = margin + (tableWidth - companyNamePaint.measureText(companyName)) / 2f
+        canvas.drawText(companyName, textX, baseline, companyNamePaint)
+        return baseline + companyNamePaint.descent() + headerBottomGap
+    }
+
+    fun drawFooter() {
+        val lineY = pageHeight - margin - footerReservedHeight + footerLineTopPadding
+        strokePaint.color = 0xFFB0BEC5.toInt()
+        canvas.drawLine(margin, lineY, margin + tableWidth, lineY, strokePaint)
+
+        val pageLabel = "Page $pageNumber"
+        val textY = lineY + footerLineBottomPadding - footerPaint.ascent()
+        val textX = margin + (tableWidth - footerPaint.measureText(pageLabel)) / 2f
+        canvas.drawText(pageLabel, textX, textY, footerPaint)
+    }
+
+    fun drawBottomDetails(group: PdfDocumentGroup, top: Float) {
+        val details = "Stock Take: ${group.stockName.ifBlank { "-" }}"
+        val baseline = top - detailsPaint.ascent()
+        canvas.drawText(details, margin, baseline, detailsPaint)
+    }
+
+    fun finishCurrentPage() {
+        drawFooter()
+        document.finishPage(page)
+    }
+
+    fun startNewPage() {
         if (pageNumber > 0) {
-            document.finishPage(page)
+            finishCurrentPage()
         }
         pageNumber += 1
         page = document.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create())
         canvas = page.canvas
-        y = margin
-        drawMergedRow(
-            text = buildTitleText(group.location),
-            top = y,
-            height = titleRowHeight,
-            textPaint = titlePaint,
-            backgroundColor = 0xFFE8F1FF.toInt(),
-            textColor = 0xFF0A4A99.toInt(),
-            centered = true
-        )
-        y += titleRowHeight
+        y = drawDocumentHeader(margin)
     }
 
     documentGroups.forEach { group ->
-        startNewPage(group)
+        startNewPage()
 
         group.sections.forEach { section ->
             val columnWidths = calculateColumnWidths(section.columns, section.rows, bodyPaint)
-            val sectionTitle = section.title
-            val minimumSectionSpace = sectionTitleHeight + headerRowHeight + bodyRowHeight
-            if (y + minimumSectionSpace > pageHeight - (metadataRowHeight + margin)) {
-                startNewPage(group)
+            val minimumSectionSpace = headerRowHeight + bodyRowHeight
+            if (y + minimumSectionSpace > contentBottomLimit - detailsTextHeight - detailsBottomGap) {
+                startNewPage()
             }
-            drawSectionTitle(sectionTitle, y)
-            y += sectionTitleHeight
             drawHeader(section.columns, columnWidths, y)
             y += headerRowHeight
 
             section.rows.forEachIndexed { rowIndex, rowValues ->
                 val currentRowHeight = calculateRowHeight(rowValues, columnWidths, bodyPaint)
-                if (y + currentRowHeight > pageHeight - (metadataRowHeight + margin)) {
-                    startNewPage(group)
-                    drawSectionTitle(sectionTitle, y)
-                    y += sectionTitleHeight
+                if (y + currentRowHeight > contentBottomLimit - detailsTextHeight - detailsBottomGap) {
+                    startNewPage()
                     drawHeader(section.columns, columnWidths, y)
                     y += headerRowHeight
                 }
@@ -324,22 +377,10 @@ private fun generateSchemaPdf(
             y += sectionGap
         }
 
-        if (y + metadataRowHeight > pageHeight - margin) {
-            startNewPage(group)
+        if (y + detailsTextHeight > contentBottomLimit) {
+            startNewPage()
         }
-
-        drawMergedRow(
-            text = buildMetadataText(
-                location = group.location,
-                uid = group.uid,
-                exportedAt = exportedAt
-            ),
-            top = y,
-            height = metadataRowHeight,
-            textPaint = metadataPaint,
-            backgroundColor = 0xFFE3F2FD.toInt(),
-            textColor = 0xFF0D47A1.toInt()
-        )
+        drawBottomDetails(group, y)
     }
 
     val fileName = buildFileName(sid, schemaId, "pdf")
@@ -347,7 +388,7 @@ private fun generateSchemaPdf(
     return try {
         val file = File(context.cacheDir, fileName)
         FileOutputStream(file).use { out ->
-            document.finishPage(page)
+            finishCurrentPage()
             document.writeTo(out)
         }
         document.close()
@@ -356,6 +397,17 @@ private fun generateSchemaPdf(
         runCatching { document.close() }
         null
     }
+}
+
+private fun isCompactColumn(columnName: String): Boolean {
+    return when (columnName.trim().uppercase(Locale.ROOT)) {
+        "SID", "UID", "TIMESTAMP" -> true
+        else -> false
+    }
+}
+
+private fun isCompactColumnIndex(index: Int, totalColumns: Int): Boolean {
+    return index == 0 || index == 1 || index == totalColumns - 1
 }
 
 private fun extractQrFields(variableData: String): Map<String, String> {
@@ -405,14 +457,14 @@ private fun buildPdfSections(records: List<ParsedSchemaRecord>): List<PdfDocumen
         val orderedQrColumns = qrColumns.values
             .filterNot { key ->
                 val normalized = normalizeColumnKey(key)
-                normalized == "sid" || normalized == "uid"
+                normalized == "sid" || normalized == "uid" || normalized == "location"
             }
             .toMutableList()
         if (orderedQrColumns.isEmpty()) {
             orderedQrColumns += "DATA"
         }
 
-        val columns = listOf("SID", "UID") + orderedQrColumns + "TIMESTAMP"
+        val columns = listOf("SID", "UID", "LOCATION") + orderedQrColumns + "TIMESTAMP"
         val rows = groupRecords
             .sortedByDescending { it.dateScanned }
             .map { record ->
@@ -427,12 +479,11 @@ private fun buildPdfSections(records: List<ParsedSchemaRecord>): List<PdfDocumen
                             .orEmpty()
                     }
                 }
-                listOf(record.sid, record.uid) + baseValues + formatPdfTimestamp(record.dateScanned)
+                listOf(record.sid, record.uid, record.location) + baseValues + formatPdfTimestamp(record.dateScanned)
             }
 
         val sections = listOf(
             PdfTableSection(
-                title = buildSectionTitleText(columns),
                 columns = columns,
                 rows = rows
             )
@@ -440,47 +491,15 @@ private fun buildPdfSections(records: List<ParsedSchemaRecord>): List<PdfDocumen
 
         PdfDocumentGroup(
             location = groupRecords.firstOrNull()?.location.orEmpty(),
-            uid = groupRecords.firstOrNull()?.uid.orEmpty(),
+            stockName = groupRecords.firstOrNull()?.stockName.orEmpty(),
             sections = sections
         )
-    }
-}
-
-private fun buildTitleText(location: String): String {
-    return "ZAMEFA ${location.ifBlank { "-" }}".uppercase()
-}
-
-private fun buildMetadataText(location: String, uid: String, exportedAt: Long): String {
-    return "LOCATION: ${location.ifBlank { "-" }} | UID: ${uid.ifBlank { "-" }} | EXPORTED: ${formatPdfDate(exportedAt)}"
-        .uppercase()
-}
-
-private fun buildSectionTitleText(columns: List<String>): String {
-    val summary = columns
-        .filterNot {
-            it.equals("TIMESTAMP", ignoreCase = true) ||
-                it.equals("SID", ignoreCase = true) ||
-                it.equals("UID", ignoreCase = true)
-        }
-        .take(3)
-        .joinToString(" / ") { it.uppercase() }
-
-    return if (summary.isBlank()) {
-        "TABLE"
-    } else {
-        "TABLE: $summary"
     }
 }
 
 private fun formatPdfTimestamp(epochMillis: Long): String {
     return runCatching {
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(epochMillis))
-    }.getOrElse { "-" }
-}
-
-private fun formatPdfDate(epochMillis: Long): String {
-    return runCatching {
-        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(epochMillis))
     }.getOrElse { "-" }
 }
 

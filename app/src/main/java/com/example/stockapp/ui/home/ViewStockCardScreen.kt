@@ -298,6 +298,7 @@ fun ViewStockCardScreen(
                             .background(topBarBrush)
                             .statusBarsPadding()
                             .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .height(40.dp)
                     ) {
                         IconButton(
                             onClick = {
@@ -332,59 +333,66 @@ fun ViewStockCardScreen(
                             modifier = Modifier.align(Alignment.Center)
                         )
 
-                        if (openedGroup == null && selectedGroupKeys.isNotEmpty()) {
-                            TextButton(
-                                onClick = {
-                                    selectedGroupKeys = allGroupKeys
-                                },
-                                enabled = inventoryGroups.isNotEmpty(),
-                                modifier = Modifier.align(Alignment.CenterEnd)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .width(72.dp)
+                                .height(36.dp),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                            if (openedGroup == null && selectedGroupKeys.isNotEmpty()) {
+                                TextButton(
+                                    onClick = {
+                                        selectedGroupKeys = allGroupKeys
+                                    },
+                                    enabled = inventoryGroups.isNotEmpty()
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(12.dp)
-                                            .clip(RoundedCornerShape(50))
-                                            .background(
-                                                if (isAllSelected) {
-                                                    StockAppColors.AccentCyan
-                                                } else {
-                                                    Color.Transparent
-                                                }
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (inventoryGroups.isNotEmpty()) {
-                                                    StockAppColors.AccentCyan
-                                                } else {
-                                                    StockAppColors.DisabledText
-                                                },
-                                                RoundedCornerShape(50)
-                                            )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        if (isAllSelected) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .align(Alignment.Center)
-                                                    .size(5.dp)
-                                                    .clip(RoundedCornerShape(50))
-                                                    .background(StockAppColors.NavyDeep)
-                                            )
+                                        Box(
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .clip(RoundedCornerShape(50))
+                                                .background(
+                                                    if (isAllSelected) {
+                                                        StockAppColors.AccentCyan
+                                                    } else {
+                                                        Color.Transparent
+                                                    }
+                                                )
+                                                .border(
+                                                    1.dp,
+                                                    if (inventoryGroups.isNotEmpty()) {
+                                                        StockAppColors.AccentCyan
+                                                    } else {
+                                                        StockAppColors.DisabledText
+                                                    },
+                                                    RoundedCornerShape(50)
+                                                )
+                                        ) {
+                                            if (isAllSelected) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .align(Alignment.Center)
+                                                        .size(5.dp)
+                                                        .clip(RoundedCornerShape(50))
+                                                        .background(StockAppColors.NavyDeep)
+                                                )
+                                            }
                                         }
+                                        Text(
+                                            text = "All",
+                                            color = if (inventoryGroups.isNotEmpty()) {
+                                                StockAppColors.AccentCyan
+                                            } else {
+                                                StockAppColors.DisabledText
+                                            },
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
                                     }
-                                    Text(
-                                        text = "All",
-                                        color = if (inventoryGroups.isNotEmpty()) {
-                                            StockAppColors.AccentCyan
-                                        } else {
-                                            StockAppColors.DisabledText
-                                        },
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
                                 }
                             }
                         }
@@ -814,7 +822,7 @@ fun ViewStockCardScreen(
                 }
             },
             confirmButton = {
-                Button(
+                TextButton(
                     onClick = {
                         val oldKey = selectedGroup.toKey()
                         stockViewModel.updateTableLocation(
@@ -834,7 +842,16 @@ fun ViewStockCardScreen(
                         showUpdateGroupDialog = false
                     },
                     enabled = updateLocation.isNotBlank()
-                ) { Text("Save") }
+                ) {
+                    Text(
+                        "Save",
+                        color = if (updateLocation.isNotBlank()) {
+                            StockAppColors.AccentCyan
+                        } else {
+                            StockAppColors.DisabledText
+                        }
+                    )
+                }
             },
             dismissButton = {
                 TextButton(onClick = { showUpdateGroupDialog = false }) {

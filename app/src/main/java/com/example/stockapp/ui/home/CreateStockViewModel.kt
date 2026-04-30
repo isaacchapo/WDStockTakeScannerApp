@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.security.SecureRandom
 import java.util.Locale
 
 class CreateStockViewModel(
@@ -45,7 +46,8 @@ class CreateStockViewModel(
     private var lastAcceptedAtMs: Long = 0L
     private val seenScanFingerprints = linkedSetOf<String>()
     private val scanMutex = Mutex()
-    private var nextSidCounter: Int? = null
+    private val sidMutex = Mutex()
+    private var nextSidValue: String? = null
 
     init {
         viewModelScope.launch {
@@ -56,10 +58,9 @@ class CreateStockViewModel(
         viewModelScope.launch {
             if (ownerUid.isBlank()) return@launch
             val nextSid = runCatching {
-                computeNextSidCounter()
-            }.getOrElse { 1 }
-            nextSidCounter = nextSid
-            _currentSid.value = formatSid(nextSid)
+                ensureCurrentSid()
+            }.getOrElse { "" }
+            _currentSid.value = nextSid
         }
     }
 
@@ -317,7 +318,7 @@ class CreateStockViewModel(
         lastAcceptedRawScan = ""
         lastAcceptedAtMs = 0L
         seenScanFingerprints.clear()
-        _currentSid.value = nextSidCounter?.let(::formatSid).orEmpty()
+        _currentSid.value = nextSidValue.orEmpty()
     }
 
     private fun rebuildScanFingerprints(items: List<StockItem>) {
@@ -408,38 +409,65 @@ class CreateStockViewModel(
         return normalizeFingerprintValue(fallbackPayload).ifBlank { "data" }
     }
 
-    private suspend fun computeNextSidCounter(): Int {
-        val maxSid = repository.getMaxNumericSid(ownerUid) ?: 0
-        return (maxSid + 1).coerceAtLeast(1)
+    private suspend fun buildReservedSidSet(): Set<String> {
+        val reserved = linkedSetOf<String>()
+        repository.getAllStockItemsSnapshot(ownerUid)
+            .mapTo(reserved) { normalizeSidValue(it.sid) }
+        _savedLocations.value
+            .mapTo(reserved) { normalizeSidValue(it.sid) }
+        _scannedItems.value
+            .mapTo(reserved) { normalizeSidValue(it.sid) }
+        nextSidValue?.let { reserved.add(normalizeSidValue(it)) }
+        return reserved.filterTo(linkedSetOf(), String::isNotBlank)
     }
 
-    private fun formatSid(value: Int): String {
-        return String.format(Locale.ROOT, "%04d", value.coerceAtLeast(0))
+    private fun normalizeSidValue(value: String): String {
+        return value.trim().uppercase(Locale.ROOT)
     }
 
     private suspend fun ensureCurrentSid(): String {
-        if (nextSidCounter == null) {
-            val nextSid = runCatching {
-                computeNextSidCounter()
-            }.getOrElse { 1 }
-            nextSidCounter = nextSid
-            _currentSid.value = formatSid(nextSid)
-        }
+        return sidMutex.withLock {
+            if (nextSidValue.isNullOrBlank()) {
+                nextSidValue = generateAvailableSid()
+            }
 
-        val current = nextSidCounter ?: 1
-        val formatted = formatSid(current)
-        if (_currentSid.value != formatted) {
-            _currentSid.value = formatted
+            val current = nextSidValue.orEmpty()
+            if (_currentSid.value != current) {
+                _currentSid.value = current
+            }
+            current
         }
-        return formatted
     }
 
     private suspend fun assignNextSid(): String {
-        val assigned = ensureCurrentSid()
-        val updated = (nextSidCounter ?: 1) + 1
-        nextSidCounter = updated
-        _currentSid.value = formatSid(updated)
-        return assigned
+        return sidMutex.withLock {
+            val assigned = nextSidValue?.takeIf { it.isNotBlank() } ?: generateAvailableSid()
+            nextSidValue = generateAvailableSid()
+            _currentSid.value = nextSidValue.orEmpty()
+            assigned
+        }
+    }
+
+    private suspend fun generateAvailableSid(): String {
+        val reserved = buildReservedSidSet()
+        repeat(MAX_SID_GENERATION_ATTEMPTS) {
+            val candidate = buildRandomSid()
+            if (normalizeSidValue(candidate) !in reserved) {
+                return candidate
+            }
+        }
+        error("Unable to generate a unique SID.")
+    }
+
+    private fun buildRandomSid(): String {
+        val builder = StringBuilder(SID_LENGTH)
+        repeat(ALPHA_SEGMENT_LENGTH) {
+            builder.append(SID_LETTERS[secureRandom.nextInt(SID_LETTERS.length)])
+        }
+        repeat(NUMERIC_SEGMENT_LENGTH) {
+            builder.append(SID_DIGITS[secureRandom.nextInt(SID_DIGITS.length)])
+        }
+        return builder.toString()
     }
 
     private data class PreparedSaveResult(
@@ -453,6 +481,13 @@ class CreateStockViewModel(
         const val ENABLE_SCANNER_DEBUG_LOGS = false
         val WHITESPACE_REGEX = Regex("\\s+")
         val KEY_SYMBOL_REGEX = Regex("[^a-z0-9]")
+        val SID_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        val SID_DIGITS = "0123456789"
+        const val ALPHA_SEGMENT_LENGTH = 3
+        const val NUMERIC_SEGMENT_LENGTH = 3
+        const val SID_LENGTH = ALPHA_SEGMENT_LENGTH + NUMERIC_SEGMENT_LENGTH
+        const val MAX_SID_GENERATION_ATTEMPTS = 512
+        val secureRandom = SecureRandom()
     }
 
     private fun logScannerDebug(message: String) {

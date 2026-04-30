@@ -419,16 +419,22 @@ private fun StockItem.toUploadDto(ownerUid: String, password: String): StockUplo
         location = location,
         stockName = stockName,
         dateScanned = dateScanned,
-        variableData = enrichVariableData(variableData, sid, resolvedUid, password),
+        variableData = enrichVariableData(variableData, sid, resolvedUid, password, location),
         ownerUid = resolvedUid,
         uid = resolvedUid,
         password = password
     )
 }
 
-private fun enrichVariableData(variableData: String, sid: String, uid: String, password: String): String {
+private fun enrichVariableData(
+    variableData: String,
+    sid: String,
+    uid: String,
+    password: String,
+    location: String
+): String {
     if (variableData.isBlank()) return variableData
-    if (sid.isBlank() && uid.isBlank()) return variableData
+    if (sid.isBlank() && uid.isBlank() && location.isBlank()) return variableData
 
     return runCatching {
         val json = JSONObject(variableData)
@@ -441,6 +447,10 @@ private fun enrichVariableData(variableData: String, sid: String, uid: String, p
 
         if (sid.isNotBlank() && "sid" !in normalizedKeys) {
             json.put("SID", sid)
+        }
+        if (location.isNotBlank() && "location" !in normalizedKeys) {
+            json.put("Location", location)
+            normalizedKeys.add("location")
         }
         if (uid.isNotBlank() && "uid" !in normalizedKeys && "owneruid" !in normalizedKeys) {
             json.put("UID", uid)
